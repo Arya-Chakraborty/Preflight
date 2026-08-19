@@ -1,0 +1,58 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "preflight-llm"
+version = "0.1.0"
+description = "Local cost-optimizing gateway for frontier LLM APIs: semantic caching, cache-aware compression, grounding injection, and a learned per-request decision policy."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+authors = [{ name = "Arya Chakraborty" }]
+keywords = ["llm", "inference", "cost-optimization", "prompt-compression", "semantic-cache", "gateway"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "litellm>=1.40",
+    "tiktoken>=0.6",
+    "pydantic>=2.6",
+    "pydantic-settings>=2.2",
+    "typer>=0.12",
+    "pyyaml>=6.0",
+    "numpy>=1.26",
+]
+
+[project.optional-dependencies]
+memory = ["sentence-transformers>=2.6"]
+compression = ["llmlingua>=0.2.2"]
+all = ["preflight-llm[memory,compression]"]
+dev = ["pytest>=8", "pytest-asyncio>=0.23", "httpx>=0.27", "ruff>=0.4"]
+
+[project.scripts]
+preflight = "preflight.cli:app"
+
+[project.urls]
+Homepage = "https://github.com/aryachakraborty/preflight-llm"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/preflight"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP"]
+ignore = ["E501"]

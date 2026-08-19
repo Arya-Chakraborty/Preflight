@@ -1,0 +1,54 @@
+# Preflight example configuration.
+# Copy to preflight.yaml (or pass --config) and adjust.
+# Every field can also be set via environment variables with the PREFLIGHT_ prefix,
+# e.g. PREFLIGHT_THETA_HIGH=0.98, PREFLIGHT_DATA_DIR=/tmp/preflight.
+
+# Where SQLite databases and vector indexes live.
+data_dir: ~/.preflight
+
+# Proxy bind address.
+host: 127.0.0.1
+port: 8411
+
+# --- Decision thresholds ---------------------------------------------------
+theta_high: 0.97      # similarity needed to serve a cached answer (A1)
+theta_low: 0.80       # lower bound of the context-reuse band (A2)
+lambda_fail: 0.02     # dollars charged per unit of failure probability in scoring
+tau: 0.25             # hard ceiling on acceptable P[fail] per action
+epsilon: 0.05         # exploration rate for the bandit (0 disables exploration)
+
+# --- Action toggles (used to build fixed-strategy baselines) ---------------
+enable_cache: true          # A1 serve-from-cache
+enable_context_reuse: true  # A2 inject context from similar past requests
+enable_compression: true    # A3 compress the dynamic prompt tail
+enable_grounding: true      # A4 inject grounding from the local document store
+# fixed_action: A5          # uncomment to force a single action (baseline mode)
+
+# --- Analyzer ---------------------------------------------------------------
+# auto = sentence-transformers when installed, hashing fallback otherwise.
+embedder: auto
+embedding_model: sentence-transformers/all-MiniLM-L6-v2
+analyzer_timeout_ms: 250
+assembler_timeout_ms: 1000
+
+# --- Memory -----------------------------------------------------------------
+semantic_ttl_s: 86400   # T2 cached answers expire after a day
+context_ttl_s: 86400    # T3 stored context freshness TTL
+
+# --- Compression ------------------------------------------------------------
+min_tail_tokens: 1500   # below this dynamic-tail size, A3 is infeasible
+compression_rate: 0.5   # target keep-rate for LLMLingua-2
+
+# --- Risk / quality ----------------------------------------------------------
+retry_cost_mult: 1.5    # E[C_retry] = mult * estimated raw-call cost
+false_hit_alpha: 1.0    # P[false hit] ~= alpha * (1 - similarity)
+audit_rate: 0.02        # fraction of A1 hits shadow-audited with a real call
+retry_similarity: 0.85  # a follow-up this similar to the previous turn flags a retry
+retry_window: 3
+
+# --- Provider cache rules (multipliers on input price) ----------------------
+cache_rules:
+  openai:    { min_prefix_tokens: 1024, read_mult: 0.50, write_mult: 1.00, ttl_s: 300 }
+  anthropic: { min_prefix_tokens: 1024, read_mult: 0.10, write_mult: 1.25, ttl_s: 300 }
+  gemini:    { min_prefix_tokens: 2048, read_mult: 0.25, write_mult: 1.00, ttl_s: 3600 }
+  default:   { min_prefix_tokens: 1024, read_mult: 0.50, write_mult: 1.00, ttl_s: 300 }
