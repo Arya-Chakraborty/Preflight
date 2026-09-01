@@ -72,8 +72,11 @@ def test_canonical_composite_action(settings):
 
 async def test_refit_from_log_end_to_end(settings, provider_calls):
     gateway = Gateway(settings)
-    for i in range(5):
-        await gateway.handle(make_payload(f"Unique question number {i} about topic {i}?"))
-    report = refit_from_log(gateway.logger, settings)
-    assert report["rows"] == 5
-    assert "A5" in report["pfail"]
+    try:
+        for i in range(5):
+            await gateway.handle(make_payload(f"Unique question number {i} about topic {i}?"))
+        report = refit_from_log(gateway.logger, settings)
+        assert report["rows"] == 5
+        assert "A5" in report["pfail"]
+    finally:
+        gateway.close()

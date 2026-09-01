@@ -22,8 +22,10 @@ passthrough, so it is never worse than not having it.
 ## Install
 
 ```bash
+pip install "preflight-llm[memory] @ git+https://github.com/aryachakraborty/preflight-llm"
+# full extras (MiniLM embeddings + LLMLingua):
 pip install "preflight-llm[all] @ git+https://github.com/aryachakraborty/preflight-llm"
-# or minimal (deterministic compression + hashing embedder only):
+# or minimal (deterministic compression + hashing embedder only — not for production cache):
 pip install "preflight-llm @ git+https://github.com/aryachakraborty/preflight-llm"
 ```
 
@@ -70,13 +72,14 @@ preflight serve  [--config preflight.yaml]   # run the proxy
 preflight stats                              # spend + action breakdown from the outcome log
 preflight refit                              # retrain cost estimators from logged traffic
 preflight replay                             # re-simulate logged traffic under the current policy
-preflight ground add docs/                   # index documents for grounding (A4)
+preflight ground docs/                       # index documents for grounding (A4)
 preflight calibrate                          # A1 false-hit risk curve
 ```
 
-Stats are also served at `GET /v1/preflight/stats` and a tiny dashboard at `/preflight`.
-
-## Configuration
+Stats are also served at `GET /v1/preflight/stats` and a tiny dashboard at `/preflight`
+(with `api_key` set, open `/preflight?key=YOUR_KEY`). Liveness is `GET /health`;
+readiness (disk, lock, sqlite) is `GET /ready`. Successful chat responses include
+`X-Preflight-Request-Id`.
 
 ## Configuration
 
@@ -87,6 +90,18 @@ Every field is overridable via `PREFLIGHT_*` environment variables. Key dials:
 - `lambda_fail` / `tau`: cost-quality trade-off (dollars per unit failure risk / hard ceiling).
 - `epsilon`: bandit exploration rate (0 disables).
 - `fixed_action`: force one action — used to build fixed-strategy baselines.
+
+## Running in production (alpha)
+
+This is not a 1.0 freeze. For a locked-down **single-tenant** process:
+
+1. `pip install "preflight-llm[memory]"` so A1/A2 use real embeddings, not hashing.
+2. Copy [preflight.prod.yaml](preflight.prod.yaml), set `api_key` and `spend_cap_usd`.
+3. `preflight serve --config preflight.prod.yaml` — **one process per `data_dir`**. A second serve fails on `preflight.lock`. Keep `data_dir` on a **local** disk (`flock` is advisory and unreliable on NFS). `preflight refit`, `ground`, and `calibrate` also take that lock — stop the server first.
+4. Probe `/health` (liveness) and `/ready` (sqlite + lock). With `api_key` set, unauthenticated `/ready` returns only `{status, ok}`. Bind addresses other than localhost require `api_key` and a spend cap or the process will refuse to start.
+5. Run `preflight calibrate` before trusting A1 in front of users.
+
+See [CHANGELOG.md](CHANGELOG.md) for 0.4.0 vs 0.3.0.
 
 ## How it works
 

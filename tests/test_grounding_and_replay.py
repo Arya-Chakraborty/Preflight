@@ -26,20 +26,26 @@ def test_grounding_directory_and_floor(settings, tmp_path):
 
 async def test_grounded_request_uses_a4_when_cheapest(settings, provider_calls):
     gateway = Gateway(settings)
-    gateway.grounding.add_text(
-        "Preflight is a local gateway that optimizes LLM inference costs."
-    )
-    resp = await gateway.handle(make_payload("What is Preflight, the local gateway?"))
-    assert "choices" in resp
-    row = gateway.logger.rows()[0]
-    assert row["action"] in ("A4", "A5")  # A4 feasible; scorer picks the cheaper
+    try:
+        gateway.grounding.add_text(
+            "Preflight is a local gateway that optimizes LLM inference costs."
+        )
+        resp = await gateway.handle(make_payload("What is Preflight, the local gateway?"))
+        assert "choices" in resp
+        row = gateway.logger.rows()[0]
+        assert row["action"] in ("A4", "A5")  # A4 feasible; scorer picks the cheaper
+    finally:
+        gateway.close()
 
 
 async def test_replay_after_traffic(settings, provider_calls):
     gateway = Gateway(settings)
-    for i in range(4):
-        await gateway.handle(make_payload(f"Question {i} on subject {i}?"))
-    report = replay_log(settings)
-    assert report["rows"] == 4
-    assert report["realized_usd"] > 0
-    assert sum(report["shift"].values()) == 4
+    try:
+        for i in range(4):
+            await gateway.handle(make_payload(f"Question {i} on subject {i}?"))
+        report = replay_log(settings)
+        assert report["rows"] == 4
+        assert report["realized_usd"] > 0
+        assert sum(report["shift"].values()) == 4
+    finally:
+        gateway.close()

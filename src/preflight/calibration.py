@@ -27,6 +27,7 @@ from pathlib import Path
 import numpy as np
 
 from preflight.config import Settings
+from preflight.db import atomic_write_text
 
 CURVE_FILE = "a1_calibration.json"
 PAIRS_FILE = "calibration_pairs.json"
@@ -77,7 +78,7 @@ class CalibrationCurve:
         return None
 
     def save(self, path: Path) -> None:
-        path.write_text(json.dumps(self.__dict__))
+        atomic_write_text(path, json.dumps(self.__dict__))
 
     @classmethod
     def load(cls, path: Path) -> CalibrationCurve | None:
@@ -242,12 +243,13 @@ def generate_pairs_live(
                         "false_hit": asker.judge(judge_model, new_query, answer),
                     }
                 )
-                scratch.write_text(json.dumps(pairs, indent=1))
+                scratch_payload = json.dumps(pairs, indent=1)
+                atomic_write_text(scratch, scratch_payload)
                 if progress is not None:
                     progress(len(pairs), n)
     except Exception:
         if len(pairs) >= 6:
-            scratch.write_text(json.dumps(pairs, indent=1))
+            atomic_write_text(scratch, json.dumps(pairs, indent=1))
             return pairs
         raise
     return pairs
@@ -289,7 +291,7 @@ def run_calibration(
     curve = fit_curve([p["sim"] for p in pairs], [p["false_hit"] for p in pairs], target_rate)
     settings.ensure_dirs()
     curve.save(settings.data_dir / CURVE_FILE)
-    (settings.data_dir / PAIRS_FILE).write_text(json.dumps(pairs, indent=1))
+    atomic_write_text(settings.data_dir / PAIRS_FILE, json.dumps(pairs, indent=1))
     return {
         "pairs": len(pairs),
         "false_hit_base_rate": round(float(np.mean([p["false_hit"] for p in pairs])), 4),

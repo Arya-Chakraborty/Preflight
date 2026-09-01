@@ -26,3 +26,4 @@ for question in [
     print(f"[{action}] {resp['choices'][0]['message']['content'][:80]}...")
 
 print("\nSpend summary:", client.stats())
+client.close()

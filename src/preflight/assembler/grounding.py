@@ -1,6 +1,6 @@
 """Local grounding store for action A4: a small embedded RAG index.
 
-Documents are added via `preflight ground add <path>`; at request time the top
+Documents are added via `preflight ground <path>`; at request time the top
 chunks above a relevance floor are offered to the decision engine, which treats
 the added tokens as an investment against retry risk.
 """
@@ -18,7 +18,7 @@ import numpy as np
 
 from preflight.analyzer.embeddings import build_embedder
 from preflight.config import Settings
-from preflight.db import connection
+from preflight.db import connection, migrate
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS chunks (
@@ -55,6 +55,7 @@ class GroundingStore:
         self._matrix: np.ndarray | None = None
         with self._conn() as conn:
             conn.executescript(_SCHEMA)
+            migrate(conn)
 
     @contextmanager
     def _conn(self):
@@ -124,3 +125,8 @@ class GroundingStore:
                     [np.frombuffer(r["embedding"], dtype=np.float32) for r in rows]
                 )
             self._dirty = False
+
+    def ping(self) -> None:
+        from preflight.db import ping as _ping
+
+        _ping(self._path)

@@ -11,14 +11,16 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import random
+import threading
 import time
 import uuid
 from collections.abc import AsyncIterator
 from typing import Any
 
 from preflight import tokens
-from preflight.analyzer.embeddings import build_embedder, cosine
+from preflight.analyzer.embeddings import HashingEmbedder, build_embedder, cosine
 from preflight.analyzer.features import Features, base_features
 from preflight.assembler.assembler import Assembler, Candidate
 from preflight.assembler.cache_hints import apply_cache_hints
@@ -28,6 +30,7 @@ from preflight.costs.estimators import load_estimators, refit_from_log
 from preflight.costs.model import CandidateStats, CostModel
 from preflight.costs.prices import provider_of
 from preflight.ledger.ledger import LedgerPrediction, PrefixLedger
+from preflight.lock import DataDirLock
 from preflight.memory.store import MemoryStore, conversation_hash
 from preflight.outcomes.logger import Outcome, OutcomeLogger
 from preflight.policy.engine import choose, feasible_actions
@@ -46,9 +49,26 @@ class Gateway:
     def __init__(self, settings: Settings):
         settings.ensure_dirs()
         self.settings = settings
+        self._dir_lock = DataDirLock(settings.data_dir)
+        if not settings.allow_multi_writer:
+            self._dir_lock.acquire()
+        try:
+            self._init_stores()
+        except BaseException:
+            self._dir_lock.release()
+            raise
+
+    def _init_stores(self) -> None:
         self.embedder = build_embedder(
-            settings.embedder, settings.embedding_model, settings.hashing_dim
+            self.settings.embedder, self.settings.embedding_model, self.settings.hashing_dim
         )
+        if self.settings.embedder == "auto" and isinstance(self.embedder, HashingEmbedder):
+            log.warning(
+                "embedder fell back to hashing; install preflight-llm[memory] "
+                "for production semantic cache quality",
+                extra={"event": "embedder_hashing_fallback"},
+            )
+        settings = self.settings
         self.memory = MemoryStore(settings.data_dir, self.embedder)
         self.ledger = PrefixLedger(settings.data_dir)
         self.grounding = GroundingStore(settings)
@@ -62,38 +82,56 @@ class Gateway:
         self._recent: dict[str, list[tuple[str, str, Features, str]]] = {}
         self._since_refit = 0
         self._bg_loop: asyncio.AbstractEventLoop | None = None
+        self._closed = False
+        # Serializes estimator mutation/refit and the retry-window bookkeeping,
+        # since request finishers run in worker threads (asyncio.to_thread).
+        self._est_lock = threading.Lock()
+        self._refitting = False
+        self._refit_thread: threading.Thread | None = None
+        # In-memory spend accounting so the spend cap is O(1) per request instead
+        # of a full-table SUM. Global total is seeded once from the log; per-session
+        # spend is seeded lazily. See _over_budget / _record_spend.
+        self._spend_lock = threading.Lock()
+        self._realized_total = float(self.logger.summary()["realized_usd"])
+        self._session_spend: dict[str, float] = {}
+        # Background audit tasks/futures, drained on close().
+        self._bg_tasks: set = set()
 
     # ------------------------------------------------------------ entrypoints
 
     async def handle(self, payload: dict, session_id: str | None = None) -> dict:
         """Non-streaming request. Returns an OpenAI-format response dict."""
-        ctx = self._preflight(payload, session_id)
+        self._capture_loop()
+        ctx = await asyncio.to_thread(self._preflight, payload, session_id)
         if ctx.get("reject_budget"):
             return {
                 "error": {
                     "message": "spend cap exceeded",
                     "type": "preflight_budget",
-                }
+                },
+                "preflight": {"request_id": ctx.get("request_id")},
             }
         if ctx["decision"].action == "A1":
-            return self._finish_cached(ctx)
+            return await asyncio.to_thread(self._finish_cached, ctx)
         response, error = await self._call_provider(ctx)
-        return self._finish_call(ctx, response, error)
+        return await asyncio.to_thread(self._finish_call, ctx, response, error)
 
     async def handle_stream(
         self, payload: dict, session_id: str | None = None
     ) -> AsyncIterator[str]:
         """Streaming request. Yields SSE lines; logs after the stream completes."""
-        ctx = self._preflight(payload, session_id)
+        self._capture_loop()
+        ctx = await asyncio.to_thread(self._preflight, payload, session_id)
         if ctx.get("reject_budget"):
             err = {
-                "error": {"message": "spend cap exceeded", "type": "preflight_budget"}
+                "error": {"message": "spend cap exceeded", "type": "preflight_budget"},
+                "preflight": {"request_id": ctx.get("request_id")},
             }
             yield f"data: {json.dumps(err)}\n\n"
             yield "data: [DONE]\n\n"
             return
         if ctx["decision"].action == "A1":
-            resp = self._finish_cached(ctx)
+            resp = await asyncio.to_thread(self._finish_cached, ctx)
             for line in _synthesize_sse(resp):
                 yield line
             return
@@ -140,7 +178,7 @@ class Gateway:
         response_dict = _chat_response(ctx["model"], full_text)
         if usage:
             response_dict["usage"] = usage
-        self._finish_call(ctx, response_dict, error, streamed=True)
+        await asyncio.to_thread(self._finish_call, ctx, response_dict, error, True)
 
     # ------------------------------------------------------------ pipeline
 
@@ -298,14 +336,41 @@ class Gateway:
         budget = self.settings.assembler_timeout_ms
         return budget > 0 and (time.perf_counter() - t0) * 1000.0 > budget
 
+    def _capture_loop(self) -> None:
+        """Remember the serving loop so finishers running in worker threads can
+        still schedule background coroutines (e.g. A1 shadow audits)."""
+        if self._bg_loop is None:
+            try:
+                self._bg_loop = asyncio.get_running_loop()
+            except RuntimeError:
+                pass
+
     def _over_budget(self, session: str) -> bool:
         cap = self.settings.spend_cap_usd
-        if cap is not None and self.logger.summary()["realized_usd"] >= cap:
-            return True
         session_cap = self.settings.session_spend_cap_usd
-        if session_cap is not None and self.logger.session_spend(session) >= session_cap:
-            return True
-        return False
+        if cap is None and session_cap is None:
+            return False
+        with self._spend_lock:
+            if cap is not None and self._realized_total >= cap:
+                return True
+            if session_cap is None:
+                return False
+            if session in self._session_spend:
+                return self._session_spend[session] >= session_cap
+        # Seed outside the lock so a SQLite SUM does not stall other requests.
+        seeded = self.logger.session_spend(session)
+        with self._spend_lock:
+            spent = self._session_spend.setdefault(session, seeded)
+            if cap is not None and self._realized_total >= cap:
+                return True
+            return spent >= session_cap
+
+    def _record_spend(self, session: str, realized: float) -> None:
+        """Fold a freshly-logged cost into the in-memory spend counters."""
+        with self._spend_lock:
+            self._realized_total += realized
+            if session in self._session_spend:
+                self._session_spend[session] += realized
 
     def _raw_candidate(self, ctx: dict) -> Candidate:
         pred: LedgerPrediction = ctx["ledger_pred"]
@@ -358,7 +423,8 @@ class Gateway:
         if response is None:
             self._log_outcome(ctx, response_text="", usage=None, error=error)
             return {
-                "error": {"message": error or "provider call failed", "type": "preflight_upstream"}
+                "error": {"message": error or "provider call failed", "type": "preflight_upstream"},
+                "preflight": {"request_id": ctx.get("request_id")},
             }
         text = _response_text(response)
         usage = response.get("usage")
@@ -447,13 +513,29 @@ class Gateway:
         )
         request_id = self.logger.log(outcome)
         ctx["request_id"] = request_id
+        self._record_spend(ctx["session"], realized)
+        log.info(
+            "request finished",
+            extra={
+                "event": "request",
+                "request_id": request_id,
+                "session": ctx["session"],
+                "action": action,
+                "cost_realized": round(realized, 8),
+                "cost_baseline": round(baseline, 8),
+                "latency_ms": round(outcome.latency_ms, 2),
+                "error": error,
+            },
+        )
 
         try:
-            if action != "A1" and out_tokens:
-                self.outlen.observe(x, action, out_tokens)
-            self.pfail.observe(x, action, failed=bool(error))
-            self._detect_retry(ctx, request_id, x, action)
-            self._maybe_auto_refit()
+            with self._est_lock:
+                persist = not self._refitting
+                if action != "A1" and out_tokens:
+                    self.outlen.observe(x, action, out_tokens, persist=persist)
+                self.pfail.observe(x, action, failed=bool(error), persist=persist)
+                self._detect_retry(ctx, request_id, x, action, persist=persist)
+                self._maybe_auto_refit()
         except Exception as exc:
             log.debug("post-log bookkeeping failed: %s", exc)
 
@@ -482,7 +564,9 @@ class Gateway:
         except Exception as exc:
             log.warning("memory/ledger write failed: %s", exc)
 
-    def _detect_retry(self, ctx: dict, request_id: str, x: Features, action: str) -> None:
+    def _detect_retry(
+        self, ctx: dict, request_id: str, x: Features, action: str, persist: bool = True
+    ) -> None:
         """A new query similar to one of the last `retry_window` in the session
         flags that earlier answer as a suspected failure."""
         session, query = ctx["session"], ctx["query_text"]
@@ -494,25 +578,37 @@ class Gateway:
                 sim = cosine(q_emb, self.embedder.embed(prev_query))
                 if sim >= self.settings.retry_similarity:
                     self.logger.flag_retry(prev_id)
-                    self.pfail.revise_to_failed(prev_action)
+                    self.pfail.revise_to_failed(prev_action, persist=persist)
                     break
         history.append((query, request_id, x, action))
         self._recent[session] = history[-window:]
 
     def _maybe_auto_refit(self) -> None:
+        """Trigger an estimator refit off the hot path. Called while holding
+        `_est_lock`; the heavy read/fit runs in a daemon thread so the triggering
+        request's finish isn't stalled by a full-log scan."""
         every = self.settings.auto_refit_every
         if every <= 0:
             return
         self._since_refit += 1
-        if self._since_refit < every:
+        if self._since_refit < every or self._refitting:
             return
         self._since_refit = 0
+        self._refitting = True
+        self._refit_thread = threading.Thread(target=self._run_refit, daemon=True)
+        self._refit_thread.start()
+
+    def _run_refit(self) -> None:
         try:
             refit_from_log(self.logger, self.settings)
-            self.outlen, self.pfail = load_estimators(self.settings)
-            self.cost_model = CostModel(self.settings, self.outlen, self.pfail)
+            outlen, pfail = load_estimators(self.settings)
+            with self._est_lock:
+                self.outlen, self.pfail = outlen, pfail
+                self.cost_model = CostModel(self.settings, self.outlen, self.pfail)
         except Exception as exc:
             log.debug("auto-refit failed: %s", exc)
+        finally:
+            self._refitting = False
 
     def _maybe_audit(self, ctx: dict) -> None:
         """Shadow-audit a fraction of A1 hits with a real call (never blocks)."""
@@ -537,20 +633,90 @@ class Gateway:
                 rid = ctx.get("request_id") or match.entry_id
                 self.logger.log_audit(rid, agreement, 0.0)
                 if agreement < 0.5:
-                    self.pfail.revise_to_failed("A1")
+                    with self._est_lock:
+                        self.pfail.revise_to_failed("A1", persist=not self._refitting)
             except Exception as exc:
                 log.debug("audit failed: %s", exc)
 
         self._schedule(_audit())
 
     def _schedule(self, coro) -> None:
-        try:
-            asyncio.get_running_loop().create_task(coro)
+        """Fire-and-forget a coroutine, tracking it so close() can cancel it."""
+        if self._closed:
+            coro.close()
             return
+        try:
+            loop = asyncio.get_running_loop()
+            handle = loop.create_task(coro)
         except RuntimeError:
-            pass
-        if self._bg_loop is not None and self._bg_loop.is_running():
-            asyncio.run_coroutine_threadsafe(coro, self._bg_loop)
+            if self._bg_loop is not None and self._bg_loop.is_running():
+                handle = asyncio.run_coroutine_threadsafe(coro, self._bg_loop)
+            else:
+                coro.close()
+                return
+        self._bg_tasks.add(handle)
+        handle.add_done_callback(self._bg_tasks.discard)
+
+    def _cancel_bg_tasks(self) -> None:
+        handles = list(self._bg_tasks)
+        self._bg_tasks.clear()
+
+        def _cancel() -> None:
+            for handle in handles:
+                try:
+                    handle.cancel()
+                except Exception:
+                    pass
+
+        loop = self._bg_loop
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
+        # Task.cancel() is not thread-safe; hop onto the serving loop when needed.
+        if loop is not None and running is not loop and loop.is_running():
+            loop.call_soon_threadsafe(_cancel)
+        else:
+            _cancel()
+
+    def close(self) -> None:
+        """Cancel background work and release the data-dir lock. Idempotent."""
+        if self._closed:
+            return
+        self._closed = True
+        self._cancel_bg_tasks()
+        t = self._refit_thread
+        if t is not None and t.is_alive():
+            t.join(timeout=5.0)
+        self._dir_lock.release()
+
+    def readiness(self) -> dict:
+        """Checks used by GET /ready. `ok` is True only if every probe passed."""
+        reasons: list[str] = []
+        data_dir = self.settings.data_dir
+        if not data_dir.is_dir() or not os.access(data_dir, os.W_OK):
+            reasons.append("data_dir not writable")
+        if not self.settings.allow_multi_writer and not self._dir_lock.held:
+            reasons.append("data_dir lock not held")
+        for name, fn in (
+            ("memory", self.memory.ping),
+            ("ledger", self.ledger.ping),
+            ("outcomes", self.logger.ping),
+            ("grounding", self.grounding.ping),
+        ):
+            try:
+                fn()
+            except Exception as exc:
+                reasons.append(f"{name} sqlite: {exc}")
+        if self.settings.embedder != "off" and self.embedder is None:
+            reasons.append("embedder failed to load")
+        return {
+            "status": "ok" if not reasons else "not_ready",
+            "ok": not reasons,
+            "reasons": reasons,
+            "lock_held": self._dir_lock.held,
+            "embedder": type(self.embedder).__name__ if self.embedder else None,
+        }
 
 
 # ---------------------------------------------------------------- helpers

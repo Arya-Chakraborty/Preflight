@@ -17,7 +17,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from preflight.db import connection
+from preflight.db import connection, migrate
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS requests (
@@ -83,6 +83,7 @@ class OutcomeLogger:
         self._lock = threading.Lock()
         with self._conn() as conn:
             conn.executescript(_SCHEMA)
+            migrate(conn)
 
     @contextmanager
     def _conn(self):
@@ -192,3 +193,12 @@ class OutcomeLogger:
                 for r in by_action
             },
         }
+
+    def ping(self) -> None:
+        from preflight.db import ping as _ping
+
+        _ping(self._path)
+
+    @property
+    def path(self) -> Path:
+        return self._path

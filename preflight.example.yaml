@@ -1,5 +1,6 @@
 # Preflight example configuration.
 # Copy to preflight.yaml (or pass --config) and adjust.
+# For a locked-down local process see preflight.prod.yaml.
 # Every field can also be set via environment variables with the PREFLIGHT_ prefix,
 # e.g. PREFLIGHT_THETA_HIGH=0.98, PREFLIGHT_DATA_DIR=/tmp/preflight.
 
@@ -55,8 +56,10 @@ thompson_sampling: false
 
 # --- Proxy ops --------------------------------------------------------------
 # api_key: change-me          # require Authorization: Bearer or x-api-key
+#                             # dashboard: open /preflight?key=change-me
 # spend_cap_usd: 10.0         # reject non-A1 calls after this global realized spend
 # session_spend_cap_usd: 1.0
+# allow_multi_writer: false   # exclusive data_dir lock (keep data_dir on local disk)
 
 # --- Provider cache rules (multipliers on input price) ----------------------
 cache_rules:

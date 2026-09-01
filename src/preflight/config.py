@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import yaml
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ACTIONS = ("A1", "A2", "A3", "A4", "A5")
@@ -97,6 +97,7 @@ class Settings(BaseSettings):
     api_key: str | None = None  # if set, require Authorization: Bearer or x-api-key
     spend_cap_usd: float | None = None  # global realized-spend ceiling
     session_spend_cap_usd: float | None = None
+    allow_multi_writer: bool = False  # default: exclusive data_dir lock
 
     # Cold-start priors
     prior_output_tokens: int = 256
@@ -115,6 +116,40 @@ class Settings(BaseSettings):
             raise ValueError(f"fixed_action must be one of {ALL_ACTIONS}, got {v!r}")
         return v
 
+    @field_validator(
+        "theta_high", "theta_low", "epsilon", "compression_rate",
+        "audit_rate", "retry_similarity",
+    )
+    @classmethod
+    def _unit_interval(cls, v: float, info) -> float:
+        if not 0.0 <= v <= 1.0:
+            raise ValueError(f"{info.field_name} must be in [0, 1], got {v}")
+        return v
+
+    @field_validator("spend_cap_usd", "session_spend_cap_usd")
+    @classmethod
+    def _nonneg_cap(cls, v: float | None, info) -> float | None:
+        if v is not None and v < 0:
+            raise ValueError(f"{info.field_name} must be >= 0, got {v}")
+        return v
+
+    @field_validator(
+        "lambda_fail", "tau", "false_hit_alpha", "retry_cost_mult",
+    )
+    @classmethod
+    def _nonneg(cls, v: float, info) -> float:
+        if v < 0:
+            raise ValueError(f"{info.field_name} must be >= 0, got {v}")
+        return v
+
+    @model_validator(mode="after")
+    def _thresholds_ordered(self) -> Settings:
+        if self.theta_low > self.theta_high:
+            raise ValueError(
+                f"theta_low ({self.theta_low}) must not exceed theta_high ({self.theta_high})"
+            )
+        return self
+
     @field_validator("data_dir", mode="before")
     @classmethod
     def _expand(cls, v):
@@ -127,6 +162,28 @@ class Settings(BaseSettings):
         self.data_dir.mkdir(parents=True, exist_ok=True)
 
 
+class BindError(ValueError):
+    """Non-loopback bind without the required safety knobs."""
+
+
+def is_loopback(host: str) -> bool:
+    return (host or "").lower().strip() in {"127.0.0.1", "localhost", "::1"}
+
+
+def validate_bind(settings: Settings) -> None:
+    """Refuse a public bind without an API key and a spend cap."""
+    if is_loopback(settings.host):
+        return
+    if not settings.api_key:
+        raise BindError(
+            f"host {settings.host!r} is not loopback; set api_key (or bind 127.0.0.1)"
+        )
+    if settings.spend_cap_usd is None:
+        raise BindError(
+            f"host {settings.host!r} is not loopback; set spend_cap_usd"
+        )
+
+
 def load_settings(config_path: str | Path | None = None) -> Settings:
     """Load settings from a YAML file (if present) merged with environment variables.
 
@@ -136,7 +193,10 @@ def load_settings(config_path: str | Path | None = None) -> Settings:
     """
     candidates: list[Path] = []
     if config_path is not None:
-        candidates = [Path(config_path)]
+        path = Path(config_path)
+        if not path.is_file():
+            raise FileNotFoundError(f"config file not found: {path}")
+        candidates = [path]
     else:
         candidates = [Path("preflight.yaml"), Path.home() / ".preflight" / "preflight.yaml"]
 

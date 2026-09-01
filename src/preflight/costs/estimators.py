@@ -13,6 +13,7 @@ import numpy as np
 
 from preflight.analyzer.features import Features
 from preflight.config import ACTIONS, Settings, canonical_action
+from preflight.db import atomic_write_text
 
 _N_FEATURES = 9  # must match Features.vector()
 
@@ -44,11 +45,12 @@ class OutputLenEstimator:
         s, n = self._means.get(self._key(x.model, action), (0.0, 0.0))
         return (s / n) if n >= 5 else self._prior
 
-    def observe(self, x: Features, action: str, tokens_out: int) -> None:
+    def observe(self, x: Features, action: str, tokens_out: int, persist: bool = True) -> None:
         key = self._key(x.model, action)
         s, n = self._means.get(key, (0.0, 0.0))
         self._means[key] = [s + tokens_out, n + 1]
-        self._save()
+        if persist:
+            self._save()
 
     def refit(self, xs: list[Features], actions: list[str], ys: list[int]) -> float:
         """Closed-form ridge regression; returns training MAE."""
@@ -63,7 +65,9 @@ class OutputLenEstimator:
         return float(np.mean(np.abs(X @ w - y)))
 
     def _save(self) -> None:
-        self._path.write_text(json.dumps({"means": self._means, "weights": self._weights}))
+        atomic_write_text(
+            self._path, json.dumps({"means": self._means, "weights": self._weights})
+        )
 
     def _load(self) -> None:
         if self._path.is_file():
@@ -114,13 +118,14 @@ class FailureEstimator:
         # Beta-style blend: prior counts as 20 pseudo-observations.
         return float((fails + 20 * prior) / (n + 20))
 
-    def observe(self, x: Features, action: str, failed: bool) -> None:
+    def observe(self, x: Features, action: str, failed: bool, persist: bool = True) -> None:
         action = canonical_action(action)
         fails, n = self._counts.get(action, (0.0, 0.0))
         self._counts[action] = [fails + (1.0 if failed else 0.0), n + 1]
-        self._save()
+        if persist:
+            self._save()
 
-    def revise_to_failed(self, action: str) -> None:
+    def revise_to_failed(self, action: str, persist: bool = True) -> None:
         """Count a previously-observed success as a failure without double-counting n."""
         action = canonical_action(action)
         fails, n = self._counts.get(action, (0.0, 0.0))
@@ -128,7 +133,8 @@ class FailureEstimator:
             self._counts[action] = [1.0, 1.0]
         else:
             self._counts[action] = [fails + 1.0, n]
-        self._save()
+        if persist:
+            self._save()
 
     def n_obs(self, action: str) -> int:
         _fails, n = self._counts.get(canonical_action(action), (0.0, 0.0))
@@ -164,7 +170,9 @@ class FailureEstimator:
         return out
 
     def _save(self) -> None:
-        self._path.write_text(json.dumps({"counts": self._counts, "weights": self._weights}))
+        atomic_write_text(
+            self._path, json.dumps({"counts": self._counts, "weights": self._weights})
+        )
 
     def _load(self) -> None:
         if self._path.is_file():

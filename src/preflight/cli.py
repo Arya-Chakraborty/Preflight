@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from pathlib import Path
 
 import typer
@@ -9,6 +10,33 @@ import typer
 app = typer.Typer(name="preflight", help="Local cost-optimizing gateway for frontier LLM APIs.")
 
 _config_opt = typer.Option(None, "--config", "-c", help="Path to preflight.yaml")
+
+
+def _load(config: Path | None):
+    from preflight.config import load_settings
+
+    try:
+        return load_settings(config)
+    except FileNotFoundError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+
+
+@contextmanager
+def _exclusive_data_dir(settings):
+    """Take the data_dir lock so write commands cannot race a running Gateway."""
+    from preflight.lock import DataDirLock, DataDirLocked
+
+    lock = DataDirLock(settings.data_dir)
+    try:
+        lock.acquire()
+    except DataDirLocked as exc:
+        typer.echo(f"refusing: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    try:
+        yield
+    finally:
+        lock.release()
 
 
 @app.command()
@@ -20,25 +48,37 @@ def serve(
     """Run the local OpenAI-compatible proxy."""
     import uvicorn
 
-    from preflight.config import load_settings
+    from preflight.config import BindError, validate_bind
+    from preflight.logfmt import configure_logging
     from preflight.proxy.server import create_app
 
-    settings = load_settings(config)
+    settings = _load(config)
     if host:
         settings.host = host
     if port:
         settings.port = port
+    configure_logging()
+    try:
+        validate_bind(settings)
+    except BindError as exc:
+        typer.echo(f"refusing to start: {exc}", err=True)
+        raise typer.Exit(1) from exc
     typer.echo(f"Preflight listening on http://{settings.host}:{settings.port}/v1")
-    uvicorn.run(create_app(settings), host=settings.host, port=settings.port, log_level="info")
+    uvicorn.run(
+        create_app(settings),
+        host=settings.host,
+        port=settings.port,
+        log_level="info",
+        timeout_graceful_shutdown=30,
+    )
 
 
 @app.command()
 def stats(config: Path | None = _config_opt):
     """Show spend and action statistics from the outcome log."""
-    from preflight.config import load_settings
     from preflight.outcomes.logger import OutcomeLogger
 
-    settings = load_settings(config)
+    settings = _load(config)
     logger = OutcomeLogger(settings.data_dir)
     summary = logger.summary()
     if summary["requests"] == 0:
@@ -60,13 +100,13 @@ def stats(config: Path | None = _config_opt):
 @app.command()
 def refit(config: Path | None = _config_opt):
     """Retrain the output-length and failure estimators from the outcome log."""
-    from preflight.config import load_settings
     from preflight.costs.estimators import refit_from_log
     from preflight.outcomes.logger import OutcomeLogger
 
-    settings = load_settings(config)
-    logger = OutcomeLogger(settings.data_dir)
-    report = refit_from_log(logger, settings)
+    settings = _load(config)
+    with _exclusive_data_dir(settings):
+        logger = OutcomeLogger(settings.data_dir)
+        report = refit_from_log(logger, settings)
     typer.echo(
         f"Refit complete: {report['rows']} rows, "
         f"output-len MAE {report['outlen_mae']:.1f} tokens, "
@@ -80,10 +120,9 @@ def replay(
     limit: int = typer.Option(500, help="Max logged requests to replay"),
 ):
     """Re-simulate logged traffic under the current policy (offline, no API calls)."""
-    from preflight.config import load_settings
     from preflight.replay import replay_log
 
-    settings = load_settings(config)
+    settings = _load(config)
     report = replay_log(settings, limit=limit)
     if report["rows"] == 0:
         typer.echo("Nothing to replay.")
@@ -103,11 +142,11 @@ def ground(
 ):
     """Add documents to the local grounding store (used by action A4)."""
     from preflight.assembler.grounding import GroundingStore
-    from preflight.config import load_settings
 
-    settings = load_settings(config)
-    store = GroundingStore(settings)
-    n = store.add_path(path)
+    settings = _load(config)
+    with _exclusive_data_dir(settings):
+        store = GroundingStore(settings)
+        n = store.add_path(path)
     typer.echo(f"Indexed {n} chunks from {path}")
 
 
@@ -128,9 +167,8 @@ def calibrate(
 ):
     """Measure the cache false-hit curve and derive an evidence-based theta_high."""
     from preflight.calibration import run_calibration
-    from preflight.config import load_settings
 
-    settings = load_settings(config)
+    settings = _load(config)
 
     def _progress(done: int, total: int) -> None:
         typer.echo(f"  judged pair {done}/{total}", err=True)
@@ -143,15 +181,16 @@ def calibrate(
             f"(about {minutes:.0f} min on Gemini free tier). "
             "Pairs are saved as they complete so a later 429 is not a total loss."
         )
-    report = run_calibration(
-        settings,
-        pairs_file=pairs,
-        n=n,
-        judge_model=judge_model,
-        target_rate=target_rate,
-        rpm=0.0 if pairs is not None else rpm,
-        progress=None if pairs is not None else _progress,
-    )
+    with _exclusive_data_dir(settings):
+        report = run_calibration(
+            settings,
+            pairs_file=pairs,
+            n=n,
+            judge_model=judge_model,
+            target_rate=target_rate,
+            rpm=0.0 if pairs is not None else rpm,
+            progress=None if pairs is not None else _progress,
+        )
     typer.echo(f"Calibrated on {report['pairs']} judged pairs "
                f"(false-hit base rate {report['false_hit_base_rate']:.1%}).")
     if report["recommended_theta"] is not None:

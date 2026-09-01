@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "preflight-llm"
-version = "0.3.0"
+version = "0.4.0"
 description = "Local cost-optimizing gateway for frontier LLM APIs: semantic caching, cache-aware compression, grounding injection, and a learned per-request decision policy."
 readme = "README.md"
 license = { file = "LICENSE" }

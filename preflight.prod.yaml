@@ -1,0 +1,36 @@
+# Production-oriented profile (alpha). Copy and set api_key / spend_cap.
+#   preflight serve --config preflight.prod.yaml
+#
+# One process per data_dir. Install the [memory] extra so semantic cache is real:
+#   pip install "preflight-llm[memory]"
+#
+# Calibrate A1 before trusting the cache: `preflight calibrate`
+
+# Keep data_dir on a local disk (the lock uses advisory flock; NFS is unsafe).
+data_dir: ~/.preflight
+host: 127.0.0.1
+port: 8411
+
+theta_high: 0.79
+theta_low: 0.60
+lambda_fail: 0.02
+tau: 0.25
+epsilon: 0              # no bandit exploration in production
+audit_rate: 0.02
+uncertainty_n_min: 8    # prefer A5 when a cheaper action is under-observed
+
+enable_cache: true
+enable_context_reuse: true
+enable_compression: true
+enable_grounding: true
+enable_compose: true
+
+embedder: sentence-transformers
+embedding_model: sentence-transformers/all-MiniLM-L6-v2
+
+# Required if you bind a non-loopback host. Leave unset for localhost demos.
+# api_key: change-me
+spend_cap_usd: 10.0     # reject non-A1 calls after this realized spend
+
+retry_window: 3
+auto_refit_every: 100

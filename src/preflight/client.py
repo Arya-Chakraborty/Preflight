@@ -86,3 +86,14 @@ class PreflightClient:
 
     def stats(self) -> dict:
         return self.gateway.logger.summary()
+
+    def close(self) -> None:
+        self.gateway.close()
+        self._loop.call_soon_threadsafe(self._loop.stop)
+        self._thread.join(timeout=5.0)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()

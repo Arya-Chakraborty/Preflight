@@ -6,7 +6,9 @@ from tests.conftest import ANSWER_TEXT, make_payload
 
 @pytest.fixture
 def gateway(settings):
-    return Gateway(settings)
+    g = Gateway(settings)
+    yield g
+    g.close()
 
 
 async def test_passthrough(gateway, provider_calls):

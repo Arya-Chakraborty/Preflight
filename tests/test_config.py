@@ -18,6 +18,11 @@ def test_yaml_load(tmp_path):
     assert (tmp_path / "data").is_dir()
 
 
+def test_missing_explicit_config_raises(tmp_path):
+    with pytest.raises(FileNotFoundError, match="config file not found"):
+        load_settings(tmp_path / "no-such.yaml")
+
+
 def test_invalid_fixed_action(tmp_path):
     with pytest.raises(ValueError):
         Settings(data_dir=tmp_path, fixed_action="A9")

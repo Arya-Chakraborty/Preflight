@@ -25,7 +25,7 @@ from pathlib import Path
 import numpy as np
 
 from preflight.analyzer.embeddings import Embedder
-from preflight.db import connection
+from preflight.db import connection, migrate
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS entries (
@@ -80,6 +80,7 @@ class MemoryStore:
         self._matrix: np.ndarray | None = None
         with self._conn() as conn:
             conn.executescript(_SCHEMA)
+            migrate(conn)
 
     @contextmanager
     def _conn(self):
@@ -242,3 +243,8 @@ class MemoryStore:
                 (k,),
             ).fetchall()
         return [(r["query_text"], r["answer_text"]) for r in rows]
+
+    def ping(self) -> None:
+        from preflight.db import ping as _ping
+
+        _ping(self._path)

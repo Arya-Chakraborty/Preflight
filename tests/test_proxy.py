@@ -14,7 +14,18 @@ def client(settings, provider_calls):
 def test_health(client):
     resp = client.get("/health")
     assert resp.status_code == 200
-    assert resp.json()["status"] == "ok"
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert "version" in body
+    assert "pid" in body
+
+
+def test_ready(client):
+    resp = client.get("/ready")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["lock_held"] is True
 
 
 def test_chat_completion(client):

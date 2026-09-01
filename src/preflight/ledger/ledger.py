@@ -22,7 +22,7 @@ from pathlib import Path
 
 from preflight import tokens
 from preflight.config import ProviderCacheRule
-from preflight.db import connection
+from preflight.db import connection, migrate
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS prefix_chains (
@@ -63,6 +63,7 @@ class PrefixLedger:
         self._lock = threading.Lock()
         with self._conn() as conn:
             conn.executescript(_SCHEMA)
+            migrate(conn)
 
     @contextmanager
     def _conn(self):
@@ -106,3 +107,8 @@ class PrefixLedger:
                    SET chain_json = excluded.chain_json, updated_at = excluded.updated_at""",
                 (session_id, json.dumps(chain), time.time()),
             )
+
+    def ping(self) -> None:
+        from preflight.db import ping as _ping
+
+        _ping(self._path)
