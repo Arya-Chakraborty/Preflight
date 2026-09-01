@@ -2,7 +2,7 @@
 
 from preflight.config import Settings, load_settings
 
-__version__ = "0.1.0"
+__version__ = "0.3.0"
 __all__ = ["Settings", "load_settings", "wrap", "__version__"]
 
 

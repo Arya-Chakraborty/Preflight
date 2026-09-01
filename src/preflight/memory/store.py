@@ -25,6 +25,7 @@ from pathlib import Path
 import numpy as np
 
 from preflight.analyzer.embeddings import Embedder
+from preflight.db import connection
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS entries (
@@ -75,20 +76,15 @@ class MemoryStore:
         self._lock = threading.Lock()
         self._index_dirty = True
         self._ids: list[str] = []
+        self._kinds: list[str] = []
         self._matrix: np.ndarray | None = None
         with self._conn() as conn:
             conn.executescript(_SCHEMA)
 
     @contextmanager
     def _conn(self):
-        """Deterministically-closed connection (GC-based closing leaks fds)."""
-        conn = sqlite3.connect(self._path, timeout=10)
-        conn.row_factory = sqlite3.Row
-        try:
-            with conn:
-                yield conn
-        finally:
-            conn.close()
+        with connection(self._path) as conn:
+            yield conn
 
     # ---------------------------------------------------------------- writes
 
@@ -124,6 +120,38 @@ class MemoryStore:
             self._index_dirty = True
         return entry_id
 
+    def store_context(
+        self,
+        model: str,
+        messages: list[dict],
+        query_text: str,
+        context: dict,
+    ) -> str:
+        """T3 write: reusable supporting context, independent of the answer row."""
+        entry_id = uuid.uuid4().hex
+        emb = self._embedder.embed(query_text).tobytes() if self._embedder and query_text else None
+        with self._lock, self._conn() as conn:
+            conn.execute(
+                """INSERT INTO entries
+                   (id, kind, created_at, model, exact_key, conv_hash,
+                    query_text, answer_text, context_json, embedding)
+                   VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    entry_id,
+                    "context",
+                    time.time(),
+                    model,
+                    exact_key(model, messages),
+                    conversation_hash(messages),
+                    query_text,
+                    "",
+                    json.dumps(context or {}, default=str),
+                    emb,
+                ),
+            )
+            self._index_dirty = True
+        return entry_id
+
     # ---------------------------------------------------------------- reads
 
     def lookup_exact(self, model: str, messages: list[dict], ttl_s: int) -> Match | None:
@@ -142,8 +170,13 @@ class MemoryStore:
         """Best embedding match among stored answers (caller applies thresholds)."""
         if self._embedder is None:
             return None
-        best = self._nearest(query_text, kind="answer", ttl_s=ttl_s)
-        return best
+        return self._nearest(query_text, kind="answer", ttl_s=ttl_s)
+
+    def lookup_context(self, query_text: str, ttl_s: int) -> Match | None:
+        """Best T3 context-store match."""
+        if self._embedder is None:
+            return None
+        return self._nearest(query_text, kind="context", ttl_s=ttl_s)
 
     def _nearest(self, query_text: str, kind: str, ttl_s: int) -> Match | None:
         self._ensure_index()
@@ -154,12 +187,15 @@ class MemoryStore:
         order = np.argsort(-sims)
         cutoff = time.time() - ttl_s
         with self._conn() as conn:
-            for idx in order[:10]:
+            for idx in order:
+                i = int(idx)
+                if self._kinds[i] != kind:
+                    continue
                 row = conn.execute(
-                    "SELECT * FROM entries WHERE id = ?", (self._ids[int(idx)],)
+                    "SELECT * FROM entries WHERE id = ?", (self._ids[i],)
                 ).fetchone()
                 if row and row["kind"] == kind and row["created_at"] >= cutoff:
-                    return self._row_to_match(row, float(sims[int(idx)]))
+                    return self._row_to_match(row, float(sims[i]))
         return None
 
     def _row_to_match(self, row: sqlite3.Row, sim: float) -> Match:
@@ -180,12 +216,13 @@ class MemoryStore:
                 return
             with self._conn() as conn:
                 rows = conn.execute(
-                    "SELECT id, embedding FROM entries WHERE embedding IS NOT NULL"
+                    "SELECT id, kind, embedding FROM entries WHERE embedding IS NOT NULL"
                 ).fetchall()
             if not rows:
-                self._ids, self._matrix = [], None
+                self._ids, self._kinds, self._matrix = [], [], None
             else:
                 self._ids = [r["id"] for r in rows]
+                self._kinds = [r["kind"] for r in rows]
                 self._matrix = np.stack(
                     [np.frombuffer(r["embedding"], dtype=np.float32) for r in rows]
                 )

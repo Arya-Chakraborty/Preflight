@@ -27,7 +27,7 @@ pip install "preflight-llm[all] @ git+https://github.com/aryachakraborty/preflig
 pip install "preflight-llm @ git+https://github.com/aryachakraborty/preflight-llm"
 ```
 
-Extras: `[memory]` = sentence-transformers embeddings, `[compression]` = LLMLingua-2.
+Extras: `[memory]` = sentence-transformers embeddings (recommended for semantic cache quality), `[compression]` = LLMLingua-2, `[examples]` = OpenAI SDK for `examples/proxy_client.py`.
 
 ## Quickstart (proxy mode)
 
@@ -47,7 +47,8 @@ resp = client.chat.completions.create(
 )
 ```
 
-Streaming is supported transparently; cached answers are replayed as SSE chunks.
+Streaming is supported in proxy mode and in `preflight.wrap()` (library mode).
+Cached answers are replayed as SSE chunks.
 
 ## Quickstart (library mode)
 
@@ -70,7 +71,12 @@ preflight stats                              # spend + action breakdown from the
 preflight refit                              # retrain cost estimators from logged traffic
 preflight replay                             # re-simulate logged traffic under the current policy
 preflight ground add docs/                   # index documents for grounding (A4)
+preflight calibrate                          # A1 false-hit risk curve
 ```
+
+Stats are also served at `GET /v1/preflight/stats` and a tiny dashboard at `/preflight`.
+
+## Configuration
 
 ## Configuration
 

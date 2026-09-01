@@ -28,6 +28,10 @@ def _stats_for(action: str, x: Features, settings: Settings) -> CandidateStats:
         tail += 200  # injected context block, compressed
     elif action == "A4":
         tail += 300  # injected grounding block
+    elif action == "A2A3":
+        tail = int(tail * settings.compression_rate) + 200
+    elif action == "A4A3":
+        tail = int(tail * settings.compression_rate) + 300
     return CandidateStats(warm_tokens=warm, cold_tokens=tail)
 
 

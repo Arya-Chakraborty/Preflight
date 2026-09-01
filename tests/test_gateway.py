@@ -89,6 +89,19 @@ async def test_retry_detection_flags_previous(gateway, provider_calls):
     rows = gateway.logger.rows()
     assert rows[0]["retry_flag"] == 1
     assert rows[1]["retry_flag"] == 0
+    assert gateway.pfail.n_obs("A5") >= 1
+
+
+async def test_spend_cap_rejects(gateway, provider_calls, settings):
+    settings.spend_cap_usd = 0.0
+    resp = await gateway.handle(make_payload("A unique spend-cap question?"))
+    assert resp["error"]["type"] == "preflight_budget"
+
+
+async def test_request_id_on_response(gateway, provider_calls):
+    resp = await gateway.handle(make_payload())
+    assert resp["preflight"]["request_id"]
+    assert resp["preflight"]["action"] == "A5"
 
 
 async def test_streaming_passthrough(gateway, provider_calls):
@@ -130,3 +143,34 @@ async def test_ledger_warms_across_turns(gateway, provider_calls, settings):
     await gateway.handle(p2, session)
     rows = gateway.logger.rows()
     assert rows[1]["tokens_in_hit"] > 0  # second turn hit the predicted warm prefix
+
+
+async def test_anthropic_outbound_has_cache_control(gateway, provider_calls):
+    session = "anth-1"
+    long_system = "You are a helpful assistant. " * 40
+    p1 = {
+        "model": "claude-haiku-3-5",
+        "messages": [
+            {"role": "system", "content": long_system},
+            {"role": "user", "content": "First question, please answer."},
+        ],
+    }
+    await gateway.handle(p1, session)
+    p2 = {
+        "model": "claude-haiku-3-5",
+        "messages": p1["messages"]
+        + [
+            {"role": "assistant", "content": ANSWER_TEXT},
+            {"role": "user", "content": "A completely different follow-up question."},
+        ],
+    }
+    await gateway.handle(p2, session)
+    outbound = provider_calls[-1]["messages"]
+    found = False
+    for msg in outbound:
+        content = msg.get("content")
+        if isinstance(content, list):
+            found = any(isinstance(b, dict) and "cache_control" in b for b in content)
+            if found:
+                break
+    assert found

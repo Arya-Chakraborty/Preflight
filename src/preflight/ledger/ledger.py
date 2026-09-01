@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import sqlite3
 import threading
 import time
 from contextlib import contextmanager
@@ -23,6 +22,7 @@ from pathlib import Path
 
 from preflight import tokens
 from preflight.config import ProviderCacheRule
+from preflight.db import connection
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS prefix_chains (
@@ -66,14 +66,8 @@ class PrefixLedger:
 
     @contextmanager
     def _conn(self):
-        """Deterministically-closed connection (GC-based closing leaks fds)."""
-        conn = sqlite3.connect(self._path, timeout=10)
-        conn.row_factory = sqlite3.Row
-        try:
-            with conn:
-                yield conn
-        finally:
-            conn.close()
+        with connection(self._path) as conn:
+            yield conn
 
     def predict(
         self,

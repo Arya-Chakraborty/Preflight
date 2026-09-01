@@ -7,7 +7,6 @@ the added tokens as an investment against retry risk.
 
 from __future__ import annotations
 
-import sqlite3
 import threading
 import time
 import uuid
@@ -19,6 +18,7 @@ import numpy as np
 
 from preflight.analyzer.embeddings import build_embedder
 from preflight.config import Settings
+from preflight.db import connection
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS chunks (
@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS chunks (
 """
 
 _CHUNK_CHARS = 1200
+_CHUNK_OVERLAP = 150
 
 
 @dataclass
@@ -57,14 +58,8 @@ class GroundingStore:
 
     @contextmanager
     def _conn(self):
-        """Deterministically-closed connection (GC-based closing leaks fds)."""
-        conn = sqlite3.connect(self._path, timeout=10)
-        conn.row_factory = sqlite3.Row
-        try:
-            with conn:
-                yield conn
-        finally:
-            conn.close()
+        with connection(self._path) as conn:
+            yield conn
 
     def add_path(self, path: Path) -> int:
         files = [path] if path.is_file() else sorted(
@@ -82,9 +77,8 @@ class GroundingStore:
     def add_text(self, text: str, source: str = "inline") -> int:
         if self._embedder is None:
             return 0
-        chunks = [
-            text[i : i + _CHUNK_CHARS] for i in range(0, len(text), _CHUNK_CHARS)
-        ]
+        step = max(_CHUNK_CHARS - _CHUNK_OVERLAP, 1)
+        chunks = [text[i : i + _CHUNK_CHARS] for i in range(0, len(text), step)]
         with self._lock, self._conn() as conn:
             for chunk in chunks:
                 if not chunk.strip():

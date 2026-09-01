@@ -16,7 +16,9 @@ def settings(tmp_path) -> Settings:
         min_tail_tokens=50,
         theta_high=0.95,
         theta_low=0.50,
-        semantic_ttl_s=3600,
+        analyzer_timeout_ms=5000,
+        assembler_timeout_ms=5000,
+        context_ttl_s=3600,
         cache_rules={
             "openai": ProviderCacheRule(min_prefix_tokens=10, read_mult=0.5, write_mult=1.0, ttl_s=300),
             "anthropic": ProviderCacheRule(min_prefix_tokens=10, read_mult=0.1, write_mult=1.25, ttl_s=300),

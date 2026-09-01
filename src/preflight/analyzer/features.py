@@ -30,6 +30,7 @@ class Features:
     grounding_score: float = 0.0  # best retrieval score from the grounding store
     matched_answer_id: str | None = None
     matched_context_id: str | None = None
+    task_type: str = ""  # optional caller tag (chat / rag / agent-tool)
 
     def vector(self) -> list[float]:
         """Numeric form used by the estimators."""

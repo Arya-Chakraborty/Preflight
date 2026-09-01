@@ -48,3 +48,31 @@ def test_upstream_error_is_502(settings, failing_provider):
     resp = client.post("/v1/chat/completions", json=make_payload())
     assert resp.status_code == 502
     assert "error" in resp.json()
+
+
+def test_models_and_stats(client):
+    models = client.get("/v1/models")
+    assert models.status_code == 200
+    ids = {m["id"] for m in models.json()["data"]}
+    assert "gpt-4o-mini" in ids
+    stats = client.get("/v1/preflight/stats")
+    assert stats.status_code == 200
+    assert "requests" in stats.json()
+    dash = client.get("/preflight")
+    assert dash.status_code == 200
+    assert "Preflight" in dash.text
+
+
+def test_api_key_required(settings, provider_calls):
+    settings.api_key = "secret"
+    app = create_app(settings)
+    client = TestClient(app)
+    denied = client.post("/v1/chat/completions", json=make_payload())
+    assert denied.status_code == 401
+    ok = client.post(
+        "/v1/chat/completions",
+        json=make_payload(),
+        headers={"x-api-key": "secret"},
+    )
+    assert ok.status_code == 200
+    assert client.get("/health").status_code == 200

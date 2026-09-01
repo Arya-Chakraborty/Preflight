@@ -38,3 +38,20 @@ def test_context_payload_roundtrip(tmp_path):
     )
     match = store.lookup_semantic("q", ttl_s=3600)
     assert match.context["grounding"] == "France facts"
+
+
+def test_t3_context_store_separate_from_answers(tmp_path):
+    store = _store(tmp_path)
+    store.store_answer("m", MSGS, "What is the capital of France?", "Paris.")
+    store.store_context(
+        "m",
+        MSGS,
+        "What is the capital of France?",
+        {"grounding": "Europe notes", "tools": "search:france", "reasoning": "it's Paris"},
+    )
+    ctx = store.lookup_context("What is the capital of France?", ttl_s=3600)
+    assert ctx is not None
+    assert ctx.context["tools"] == "search:france"
+    assert ctx.answer_text == ""
+    # TTL: expired context is invisible
+    assert store.lookup_context("What is the capital of France?", ttl_s=-1) is None

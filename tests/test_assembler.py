@@ -1,5 +1,6 @@
 import json
 
+from preflight import tokens
 from preflight.analyzer.features import Features
 from preflight.assembler.assembler import Assembler
 from preflight.assembler.compressor import Compressor, deterministic_clean
@@ -19,12 +20,13 @@ MSGS = [
 
 def test_a3_preserves_warm_prefix_and_final_message(settings):
     asm = Assembler(settings)
-    pred = LedgerPrediction(warm_tokens=30, cold_tokens=22, warm_messages=2)
+    head_tokens = tokens.count_messages(MSGS[:2], X.model)
+    pred = LedgerPrediction(warm_tokens=head_tokens, cold_tokens=22, warm_messages=2)
     cand = asm.build("A3", MSGS, X, pred)
     assert cand.messages[0] == MSGS[0]  # warm prefix byte-identical
     assert cand.messages[1] == MSGS[1]
     assert cand.messages[-1] == MSGS[-1]  # query intact
-    assert cand.stats.warm_tokens == 30
+    assert cand.stats.warm_tokens == head_tokens
     assert cand.stats.warm_tokens + cand.stats.cold_tokens == cand.stats.total
 
 
@@ -50,6 +52,37 @@ def test_a4_grounding_block(settings):
     hits = [GroundingHit("Fact one.", 0.8, "doc.md")]
     cand = asm.build("A4", MSGS, X, LedgerPrediction(0, 1000, 0), grounding_hits=hits)
     assert any("Fact one." in (m.get("content") or "") for m in cand.messages)
+
+
+def test_a2_injection_is_billed_cold(settings):
+    asm = Assembler(settings)
+    match = Match("id1", 0.9, "Paris.", {"grounding": "France is in Europe."}, "h", 0.0)
+    head_tokens = tokens.count_messages(MSGS[:2], X.model)
+    pred = LedgerPrediction(warm_tokens=head_tokens, cold_tokens=10, warm_messages=2)
+    cand = asm.build("A2", MSGS, X, pred, context_match=match)
+    assert cand.stats.warm_tokens == head_tokens
+    assert cand.stats.cold_tokens > 10
+    assert cand.messages[:2] == MSGS[:2]
+
+
+def test_a2a3_injects_then_compresses(settings):
+    asm = Assembler(settings)
+    match = Match("id1", 0.7, "Paris.", {"grounding": "France is in Europe."}, "h", 0.0)
+    cand = asm.build("A2A3", MSGS, X, LedgerPrediction(0, 1000, 0), context_match=match)
+    assert cand.action == "A2A3"
+    assert any("France is in Europe" in (m.get("content") or "") for m in cand.messages)
+    assert cand.messages[-1] == MSGS[-1]
+
+
+def test_skips_tool_role_compression(settings):
+    asm = Assembler(settings)
+    msgs = [
+        {"role": "system", "content": "sys"},
+        {"role": "tool", "content": "tool output with     extra    spaces"},
+        {"role": "user", "content": "q?"},
+    ]
+    cand = asm.build("A3", msgs, X, LedgerPrediction(0, 100, 0))
+    assert cand.messages[1]["content"] == "tool output with     extra    spaces"
 
 
 def test_json_bypass():

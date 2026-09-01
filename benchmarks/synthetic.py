@@ -99,10 +99,14 @@ def generate_stream(n: int, duplicate_rate: float, paraphrase_rate: float,
     return payloads
 
 
-def install_mock_provider(seed: int) -> None:
+def install_mock_provider(seed: int, fail_rate: float = 0.0) -> None:
     rng = random.Random(seed)
 
     async def fake_acompletion(model, messages, stream=False, **kwargs):
+        blob = str(messages)
+        grounded = "Reference material" in blob
+        if fail_rate > 0 and not grounded and rng.random() < fail_rate:
+            raise RuntimeError("simulated provider failure")
         words = 40 + rng.randrange(120)
         text = " ".join(f"tok{i}" for i in range(words))
         return {
@@ -158,11 +162,13 @@ def main() -> None:
     ap.add_argument("--model", default="gpt-4o-mini")
     ap.add_argument("--seed", type=int, default=7)
     ap.add_argument("--live", action="store_true", help="use the real provider API")
+    ap.add_argument("--fail-rate", type=float, default=0.0,
+                    help="mock-only: fail ungrounded calls this often so A4 can look like insurance")
     ap.add_argument("--baselines", default="all", help="comma list or 'all'")
     args = ap.parse_args()
 
     if not args.live:
-        install_mock_provider(args.seed)
+        install_mock_provider(args.seed, fail_rate=args.fail_rate)
 
     payloads = generate_stream(
         args.requests, args.duplicate_rate, args.paraphrase_rate,

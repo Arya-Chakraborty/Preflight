@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "preflight-llm"
-version = "0.1.0"
+version = "0.3.0"
 description = "Local cost-optimizing gateway for frontier LLM APIs: semantic caching, cache-aware compression, grounding injection, and a learned per-request decision policy."
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -34,7 +34,8 @@ dependencies = [
 memory = ["sentence-transformers>=2.6"]
 compression = ["llmlingua>=0.2.2"]
 all = ["preflight-llm[memory,compression]"]
-dev = ["pytest>=8", "pytest-asyncio>=0.23", "httpx>=0.27", "ruff>=0.4"]
+examples = ["openai>=1.0"]
+dev = ["pytest>=8", "pytest-asyncio>=0.23", "httpx>=0.27", "ruff>=0.4", "openai>=1.0"]
 
 [project.scripts]
 preflight = "preflight.cli:app"

@@ -73,3 +73,40 @@ def test_a1_never_explored(settings):
     for seed in range(20):
         d = choose(estimates, _x(), settings, rng=random.Random(seed))
         assert not (d.explored and d.action == "A1")
+
+
+def test_compose_feasible_when_both_gates_pass(settings):
+    x = _x(context_similarity=0.85, tail_tokens=100, grounding_score=0.9)
+    acts = feasible_actions(x, settings, True, True)
+    assert "A2A3" in acts and "A4A3" in acts
+    settings.enable_compose = False
+    acts = feasible_actions(x, settings, True, True)
+    assert "A2A3" not in acts and "A4A3" not in acts
+
+
+def test_uncertainty_fallback_to_a5(settings):
+    settings.uncertainty_n_min = 8
+    estimates = {"A5": _est("A5", 0.02), "A3": _est("A3", 0.001)}
+    d = choose(estimates, _x(), settings, obs_counts={"A3": 1, "A5": 20})
+    assert d.action == "A5"
+
+
+def test_uncertainty_disabled_when_n_min_zero(settings):
+    settings.uncertainty_n_min = 0
+    estimates = {"A5": _est("A5", 0.02), "A3": _est("A3", 0.001)}
+    d = choose(estimates, _x(), settings, obs_counts={"A3": 0, "A5": 0})
+    assert d.action == "A3"
+
+
+def test_thompson_picks_admissible_action(settings):
+    settings.thompson_sampling = True
+    settings.epsilon = 0.0
+    estimates = {"A5": _est("A5", 0.02), "A3": _est("A3", 0.01)}
+    d = choose(
+        estimates,
+        _x(),
+        settings,
+        rng=random.Random(1),
+        fail_success={"A5": (1.0, 20.0), "A3": (1.0, 20.0)},
+    )
+    assert d.action in ("A3", "A5")

@@ -28,9 +28,10 @@ enable_grounding: true      # A4 inject grounding from the local document store
 
 # --- Analyzer ---------------------------------------------------------------
 # auto = sentence-transformers when installed, hashing fallback otherwise.
+# Production semantic caching should install the [memory] extra.
 embedder: auto
 embedding_model: sentence-transformers/all-MiniLM-L6-v2
-analyzer_timeout_ms: 250
+analyzer_timeout_ms: 250   # skip remaining analysis and fall back toward A5
 assembler_timeout_ms: 1000
 
 # --- Memory -----------------------------------------------------------------
@@ -40,13 +41,22 @@ context_ttl_s: 86400    # T3 stored context freshness TTL
 # --- Compression ------------------------------------------------------------
 min_tail_tokens: 1500   # below this dynamic-tail size, A3 is infeasible
 compression_rate: 0.5   # target keep-rate for LLMLingua-2
+enable_compose: true    # A2A3 / A4A3: inject then compress the cold tail
 
 # --- Risk / quality ----------------------------------------------------------
 retry_cost_mult: 1.5    # E[C_retry] = mult * estimated raw-call cost
 false_hit_alpha: 1.0    # P[false hit] ~= alpha * (1 - similarity)
 audit_rate: 0.02        # fraction of A1 hits shadow-audited with a real call
-retry_similarity: 0.85  # a follow-up this similar to the previous turn flags a retry
-retry_window: 3
+retry_similarity: 0.85  # a follow-up this similar to a recent turn flags a retry
+retry_window: 3         # how many previous turns in the session to compare
+auto_refit_every: 0     # set e.g. 100 to refit estimators every N logged rows
+uncertainty_n_min: 0    # set e.g. 8 to prefer A5 when a cheaper action is under-observed
+thompson_sampling: false
+
+# --- Proxy ops --------------------------------------------------------------
+# api_key: change-me          # require Authorization: Bearer or x-api-key
+# spend_cap_usd: 10.0         # reject non-A1 calls after this global realized spend
+# session_spend_cap_usd: 1.0
 
 # --- Provider cache rules (multipliers on input price) ----------------------
 cache_rules:

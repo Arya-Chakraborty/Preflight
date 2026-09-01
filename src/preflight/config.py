@@ -9,6 +9,21 @@ from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ACTIONS = ("A1", "A2", "A3", "A4", "A5")
+COMPOSITE_ACTIONS = ("A2A3", "A4A3")
+ALL_ACTIONS = ACTIONS + COMPOSITE_ACTIONS
+
+
+def canonical_action(action: str) -> str:
+    """Map composite actions onto the estimator's A1–A5 one-hot basis."""
+    if action in ACTIONS:
+        return action
+    if action.startswith("A4"):
+        return "A4"
+    if action.startswith("A2"):
+        return "A2"
+    if "A3" in action:
+        return "A3"
+    return "A5"
 
 
 class ProviderCacheRule(BaseModel):
@@ -49,6 +64,7 @@ class Settings(BaseSettings):
     enable_context_reuse: bool = True
     enable_compression: bool = True
     enable_grounding: bool = True
+    enable_compose: bool = True  # A2A3 / A4A3: inject then compress tail
     fixed_action: str | None = None  # force one action (baseline mode)
 
     # Analyzer
@@ -72,6 +88,15 @@ class Settings(BaseSettings):
     audit_rate: float = 0.02
     retry_similarity: float = 0.85
     retry_window: int = 3
+    auto_refit_every: int = 0  # 0 disables; else refit estimators every N logged rows
+    uncertainty_fallback: bool = True
+    uncertainty_n_min: int = 0  # 0 disables; prefer A5 when best action has fewer obs
+    thompson_sampling: bool = False
+
+    # Proxy ops
+    api_key: str | None = None  # if set, require Authorization: Bearer or x-api-key
+    spend_cap_usd: float | None = None  # global realized-spend ceiling
+    session_spend_cap_usd: float | None = None
 
     # Cold-start priors
     prior_output_tokens: int = 256
@@ -86,8 +111,8 @@ class Settings(BaseSettings):
     @field_validator("fixed_action")
     @classmethod
     def _valid_action(cls, v: str | None) -> str | None:
-        if v is not None and v not in ACTIONS:
-            raise ValueError(f"fixed_action must be one of {ACTIONS}, got {v!r}")
+        if v is not None and v not in ALL_ACTIONS:
+            raise ValueError(f"fixed_action must be one of {ALL_ACTIONS}, got {v!r}")
         return v
 
     @field_validator("data_dir", mode="before")

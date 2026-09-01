@@ -12,12 +12,13 @@ import json
 import numpy as np
 
 from preflight.analyzer.features import Features
-from preflight.config import ACTIONS, Settings
+from preflight.config import ACTIONS, Settings, canonical_action
 
 _N_FEATURES = 9  # must match Features.vector()
 
 
 def _design_row(x: Features, action: str) -> np.ndarray:
+    action = canonical_action(action)
     onehot = [1.0 if a == action else 0.0 for a in ACTIONS]
     return np.array([1.0] + x.vector() + onehot, dtype=np.float64)
 
@@ -33,7 +34,7 @@ class OutputLenEstimator:
         self._load()
 
     def _key(self, model: str, action: str) -> str:
-        return f"{model}|{action}"
+        return f"{model}|{canonical_action(action)}"
 
     def predict(self, x: Features, action: str) -> float:
         if self._weights is not None:
@@ -98,6 +99,7 @@ class FailureEstimator:
             self._a1_curve = None
 
     def predict(self, x: Features, action: str) -> float:
+        action = canonical_action(action)
         if action == "A1":
             # Never learned by exploration (we do not gamble on serving wrong
             # answers): measured calibration curve first, heuristic fallback.
@@ -113,9 +115,32 @@ class FailureEstimator:
         return float((fails + 20 * prior) / (n + 20))
 
     def observe(self, x: Features, action: str, failed: bool) -> None:
+        action = canonical_action(action)
         fails, n = self._counts.get(action, (0.0, 0.0))
         self._counts[action] = [fails + (1.0 if failed else 0.0), n + 1]
         self._save()
+
+    def revise_to_failed(self, action: str) -> None:
+        """Count a previously-observed success as a failure without double-counting n."""
+        action = canonical_action(action)
+        fails, n = self._counts.get(action, (0.0, 0.0))
+        if n <= 0:
+            self._counts[action] = [1.0, 1.0]
+        else:
+            self._counts[action] = [fails + 1.0, n]
+        self._save()
+
+    def n_obs(self, action: str) -> int:
+        _fails, n = self._counts.get(canonical_action(action), (0.0, 0.0))
+        return int(n)
+
+    def obs_counts(self) -> dict[str, int]:
+        return {a: self.n_obs(a) for a in ACTIONS}
+
+    def fail_success_counts(self, action: str) -> tuple[float, float]:
+        """(fails, successes) for Thompson sampling."""
+        fails, n = self._counts.get(canonical_action(action), (0.0, 0.0))
+        return float(fails), max(float(n) - float(fails), 0.0)
 
     def refit(self, xs: list[Features], actions: list[str], ys: list[bool]) -> None:
         if len(ys) < 50 or len(set(ys)) < 2:

@@ -17,6 +17,8 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from preflight.db import connection
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS requests (
     id TEXT PRIMARY KEY,
@@ -84,18 +86,8 @@ class OutcomeLogger:
 
     @contextmanager
     def _conn(self):
-        """Open, use inside a transaction, and ALWAYS close.
-
-        Relying on GC to close per-call connections exhausts the process fd
-        limit (macOS defaults to 256) under sustained traffic.
-        """
-        conn = sqlite3.connect(self._path, timeout=10)
-        conn.row_factory = sqlite3.Row
-        try:
-            with conn:
-                yield conn
-        finally:
-            conn.close()
+        with connection(self._path) as conn:
+            yield conn
 
     def log(self, o: Outcome) -> str:
         with self._lock, self._conn() as conn:
@@ -140,6 +132,26 @@ class OutcomeLogger:
                 "INSERT INTO audits (request_id, ts, agreement, shadow_cost) VALUES (?,?,?,?)",
                 (request_id, time.time(), agreement, shadow_cost),
             )
+            conn.execute(
+                "UPDATE requests SET quality = ? WHERE id = ?",
+                (agreement, request_id),
+            )
+
+    def set_quality(self, request_id: str, quality: float) -> None:
+        with self._lock, self._conn() as conn:
+            conn.execute("UPDATE requests SET quality = ? WHERE id = ?", (quality, request_id))
+
+    def get(self, request_id: str):
+        with self._conn() as conn:
+            return conn.execute("SELECT * FROM requests WHERE id = ?", (request_id,)).fetchone()
+
+    def session_spend(self, session_id: str) -> float:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT COALESCE(SUM(cost_realized), 0) AS usd FROM requests WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+        return float(row["usd"])
 
     def last_in_session(self, session_id: str, n: int = 3) -> list[sqlite3.Row]:
         with self._conn() as conn:

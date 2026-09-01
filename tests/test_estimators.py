@@ -55,6 +55,21 @@ def test_pfail_prior_blend(settings):
     assert est.predict(_x(), "A3") > p0
 
 
+def test_pfail_revise_to_failed_does_not_double_n(settings):
+    est = FailureEstimator(settings)
+    est.observe(_x(), "A5", failed=False)
+    est.revise_to_failed("A5")
+    assert est.n_obs("A5") == 1
+    fails, succ = est.fail_success_counts("A5")
+    assert fails == 1.0 and succ == 0.0
+
+
+def test_canonical_composite_action(settings):
+    est = FailureEstimator(settings)
+    est.observe(_x(), "A2A3", failed=False)
+    assert est.n_obs("A2") == 1
+
+
 async def test_refit_from_log_end_to_end(settings, provider_calls):
     gateway = Gateway(settings)
     for i in range(5):

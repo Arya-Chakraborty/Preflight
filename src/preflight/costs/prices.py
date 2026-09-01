@@ -24,6 +24,10 @@ _STATIC: dict[str, Price] = {
 _DEFAULT = Price(3.00e-6, 15.00e-6)  # conservative frontier-model default
 
 
+def listed_models() -> list[str]:
+    return sorted(_STATIC)
+
+
 def get_price(model: str) -> Price:
     if model in _STATIC:
         return _STATIC[model]

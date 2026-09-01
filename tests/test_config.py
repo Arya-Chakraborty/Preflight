@@ -23,6 +23,11 @@ def test_invalid_fixed_action(tmp_path):
         Settings(data_dir=tmp_path, fixed_action="A9")
 
 
+def test_composite_fixed_action_allowed(tmp_path):
+    s = Settings(data_dir=tmp_path, fixed_action="A2A3")
+    assert s.fixed_action == "A2A3"
+
+
 def test_env_override(tmp_path, monkeypatch):
     monkeypatch.setenv("PREFLIGHT_TAU", "0.42")
     s = Settings(data_dir=tmp_path)

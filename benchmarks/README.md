@@ -24,18 +24,16 @@ The stream generator controls the three axes the paper's claims depend on:
 
 ```bash
 python benchmarks/synthetic.py --requests 200 --duplicate-rate 0.25
+# optional: simulated failures on ungrounded calls so A4 can look like insurance
+python benchmarks/synthetic.py --requests 200 --fail-rate 0.3
 ```
 
 The provider is mocked locally; token accounting still runs through the real
 tokenizer, prefix ledger, and cost model, so relative comparisons are meaningful.
 
-One caveat to read the mock results correctly: the simulated provider never
-fails, so action A4's value proposition (spend grounding tokens now to avoid
-retry costs later) cannot materialize, and the cold-start priors make the
-policy buy insurance it never needs. On live traffic with real failures the
-failure estimator learns actual per-action risk from retry flags; in the mock,
-`cache_only` can therefore edge out the full policy. This is expected and is
-exactly the estimator-bias phenomenon `preflight refit` exists to correct.
+With `--fail-rate 0` the simulated provider never fails, so A4's insurance
+value cannot materialize. Use `--fail-rate` (ungrounded calls fail; A4 prompts
+contain `Reference material` and succeed) or live traffic plus `preflight refit`.
 
 ### Run live
 
@@ -48,14 +46,6 @@ Results are printed as a table and written to `results/synthetic.csv`.
 
 ## External benchmarks (evaluation roadmap)
 
-For the paper-grade evaluation described in DESIGN.md section 5, point the
-proxy at real workloads:
-
-1. **tau-bench retail** (verifiable task rewards, agentic): run the agent with
-   `base_url=http://127.0.0.1:8411/v1`, one Preflight config per baseline, and
-   compare `preflight stats` outputs at equal task reward.
-2. **LongBench-v2 RAG**: replay the query distribution through the proxy with
-   documents indexed via `preflight ground add`.
-
-Both benchmarks require their own harnesses/API budgets and are intentionally
-kept out of this repository's test path.
+For the paper-grade evaluation described in DESIGN.md section 5, see
+[`benchmarks/external/README.md`](external/README.md) (tau-bench retail and
+LongBench-v2 RAG). Those harnesses are intentionally kept out of CI.

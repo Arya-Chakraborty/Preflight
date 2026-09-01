@@ -40,3 +40,11 @@ def test_session_rows(tmp_path):
     logger.log(_outcome(session_id="a"))
     logger.log(_outcome(session_id="b"))
     assert len(logger.last_in_session("a")) == 1
+
+
+def test_audit_writes_quality(tmp_path):
+    logger = OutcomeLogger(tmp_path)
+    rid = logger.log(_outcome())
+    logger.log_audit(rid, 0.91, 0.0)
+    assert logger.rows()[0]["quality"] == 0.91
+    assert logger.session_spend("s1") > 0

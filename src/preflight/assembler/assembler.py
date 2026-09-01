@@ -50,7 +50,7 @@ class Assembler:
         if action == "A5":
             return self._finish("A5", messages, x, ledger_pred)
         if action == "A3":
-            return self._compress_tail(messages, x, ledger_pred)
+            return self._compress_tail(messages, x, ledger_pred, action="A3")
         if action == "A2":
             return self._inject(
                 "A2", messages, x, ledger_pred, self._context_block(context_match)
@@ -59,12 +59,26 @@ class Assembler:
             return self._inject(
                 "A4", messages, x, ledger_pred, self._grounding_block(grounding_hits or [])
             )
+        if action == "A2A3":
+            injected = self._inject(
+                "A2", messages, x, ledger_pred, self._context_block(context_match)
+            )
+            return self._compress_tail(injected.messages, x, ledger_pred, action="A2A3")
+        if action == "A4A3":
+            injected = self._inject(
+                "A4", messages, x, ledger_pred, self._grounding_block(grounding_hits or [])
+            )
+            return self._compress_tail(injected.messages, x, ledger_pred, action="A4A3")
         raise ValueError(f"Assembler cannot build action {action!r}")
 
     # ------------------------------------------------------------------ A3
 
     def _compress_tail(
-        self, messages: list[dict], x: Features, pred: LedgerPrediction
+        self,
+        messages: list[dict],
+        x: Features,
+        pred: LedgerPrediction,
+        action: str = "A3",
     ) -> Candidate:
         warm = pred.warm_messages
         head = messages[:warm]
@@ -73,12 +87,18 @@ class Assembler:
         for i, msg in enumerate(tail):
             is_last = i == len(tail) - 1
             content = msg.get("content")
-            if is_last or msg.get("role") == "system" or not isinstance(content, str):
+            role = msg.get("role")
+            if (
+                is_last
+                or role in ("system", "tool")
+                or msg.get("tool_calls")
+                or not isinstance(content, str)
+            ):
                 new_tail.append(msg)
                 continue
             compressed = self._compressor.compress(content)
             new_tail.append({**msg, "content": compressed})
-        return self._finish("A3", head + new_tail, x, pred)
+        return self._finish(action, head + new_tail, x, pred)
 
     # --------------------------------------------------------------- A2/A4
 
@@ -125,7 +145,12 @@ class Assembler:
         self, action: str, messages: list[dict], x: Features, pred: LedgerPrediction
     ) -> Candidate:
         total = tokens.count_messages(messages, x.model)
-        warm = min(pred.warm_tokens, total)
+        if pred.warm_messages > 0:
+            n_head = min(pred.warm_messages, len(messages))
+            warm = tokens.count_messages(messages[:n_head], x.model)
+            warm = min(warm, pred.warm_tokens) if pred.warm_tokens else warm
+        else:
+            warm = min(pred.warm_tokens, total)
         return Candidate(
             action=action,
             messages=messages,
