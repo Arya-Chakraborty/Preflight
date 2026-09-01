@@ -21,7 +21,9 @@ classifiers = [
 dependencies = [
     "fastapi>=0.110",
     "uvicorn>=0.29",
-    "litellm>=1.40",
+    # 1.98+ imports NotRequired from typing (3.11+ only) and crashes on 3.10.
+    "litellm>=1.40,<1.98; python_version < '3.11'",
+    "litellm>=1.40; python_version >= '3.11'",
     "tiktoken>=0.6",
     "pydantic>=2.6",
     "pydantic-settings>=2.2",
