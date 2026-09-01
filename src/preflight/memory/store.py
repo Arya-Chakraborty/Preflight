@@ -18,6 +18,7 @@ import sqlite3
 import threading
 import time
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -78,10 +79,16 @@ class MemoryStore:
         with self._conn() as conn:
             conn.executescript(_SCHEMA)
 
-    def _conn(self) -> sqlite3.Connection:
+    @contextmanager
+    def _conn(self):
+        """Deterministically-closed connection (GC-based closing leaks fds)."""
         conn = sqlite3.connect(self._path, timeout=10)
         conn.row_factory = sqlite3.Row
-        return conn
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
 
     # ---------------------------------------------------------------- writes
 
@@ -187,3 +194,14 @@ class MemoryStore:
     def count(self) -> int:
         with self._conn() as conn:
             return conn.execute("SELECT COUNT(*) FROM entries").fetchone()[0]
+
+    def sample_answers(self, k: int) -> list[tuple[str, str]]:
+        """Random (query, answer) pairs - the seed data for cache calibration."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                """SELECT query_text, answer_text FROM entries
+                   WHERE kind = 'answer' AND query_text != '' AND answer_text != ''
+                   ORDER BY RANDOM() LIMIT ?""",
+                (k,),
+            ).fetchall()
+        return [(r["query_text"], r["answer_text"]) for r in rows]

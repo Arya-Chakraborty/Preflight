@@ -66,17 +66,6 @@ class CostModel:
         expected = input_cost + price.output_per_tok * out_tokens + retry_term
         return Estimate(action, expected, p_fail, out_tokens, input_cost, retry_term)
 
-    def raw_call_cost(self, x: Features, stats: CandidateStats) -> float:
-        """Estimated cost of a raw call - the 'baseline_usd' column and retry base."""
-        price = get_price(x.model)
-        rule = self._s.cache_rule_for(x.provider)
-        out_tokens = self._outlen.predict(x, "A5")
-        return (
-            price.input_per_tok * stats.cold_tokens
-            + price.input_per_tok * rule.read_mult * stats.warm_tokens
-            + price.output_per_tok * out_tokens
-        )
-
     def _retry_cost(self, x: Features) -> float:
         """E[C_retry]: a retry resends the grown context, so it costs more than the original."""
         price = get_price(x.model)

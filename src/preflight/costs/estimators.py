@@ -72,7 +72,12 @@ class OutputLenEstimator:
 
 
 class FailureEstimator:
-    """P[fail | x, a]: per-action base rates blended with priors, optional logistic refit."""
+    """P[fail | x, a]: per-action base rates blended with priors, optional logistic refit.
+
+    A1 (cache-hit) risk is special-cased: it uses the measured isotonic
+    calibration curve when `preflight calibrate` has produced one, and the
+    linear alpha heuristic only as a cold-start fallback.
+    """
 
     def __init__(self, settings: Settings):
         self._priors = dict(settings.prior_pfail)
@@ -80,12 +85,24 @@ class FailureEstimator:
         self._path = settings.data_dir / "pfail_model.json"
         self._counts: dict[str, list[float]] = {}  # action -> [fails, n]
         self._weights: list[float] | None = None
+        self._a1_curve = None
         self._load()
+        self._load_a1_curve(settings)
+
+    def _load_a1_curve(self, settings: Settings) -> None:
+        try:
+            from preflight.calibration import CURVE_FILE, CalibrationCurve
+
+            self._a1_curve = CalibrationCurve.load(settings.data_dir / CURVE_FILE)
+        except Exception:
+            self._a1_curve = None
 
     def predict(self, x: Features, action: str) -> float:
         if action == "A1":
-            # False-hit risk for cached answers is similarity-calibrated, never learned
-            # by exploration (we do not gamble on serving wrong answers).
+            # Never learned by exploration (we do not gamble on serving wrong
+            # answers): measured calibration curve first, heuristic fallback.
+            if self._a1_curve is not None:
+                return float(self._a1_curve.predict(x.max_similarity))
             return float(np.clip(self._alpha * (1.0 - x.max_similarity), 0.0, 1.0))
         if self._weights is not None:
             z = float(_design_row(x, action) @ np.array(self._weights))

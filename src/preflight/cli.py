@@ -112,6 +112,63 @@ def ground(
 
 
 @app.command()
+def calibrate(
+    config: Path | None = _config_opt,
+    pairs: Path | None = typer.Option(
+        None, help="Pre-labeled pairs JSON (offline mode); omit to generate live from memory"
+    ),
+    n: int = typer.Option(30, help="Pairs to generate in live mode"),
+    judge_model: str = typer.Option(
+        "gemini/gemini-3.5-flash-lite", help="Model used to paraphrase and judge"
+    ),
+    target_rate: float = typer.Option(0.01, help="Acceptable false-hit rate for theta_high"),
+    rpm: float = typer.Option(
+        15.0, help="Max LLM requests per minute (Gemini free tier is 15)"
+    ),
+):
+    """Measure the cache false-hit curve and derive an evidence-based theta_high."""
+    from preflight.calibration import run_calibration
+    from preflight.config import load_settings
+
+    settings = load_settings(config)
+
+    def _progress(done: int, total: int) -> None:
+        typer.echo(f"  judged pair {done}/{total}", err=True)
+
+    if pairs is None:
+        # ~5 LLM calls per 3 pairs at this rpm ≈ wall-clock estimate
+        minutes = (n * 5 / 3) / max(rpm, 0.1) if rpm > 0 else 0
+        typer.echo(
+            f"Live calibration: ~{n} pairs, paced at {rpm:g} RPM "
+            f"(about {minutes:.0f} min on Gemini free tier). "
+            "Pairs are saved as they complete so a later 429 is not a total loss."
+        )
+    report = run_calibration(
+        settings,
+        pairs_file=pairs,
+        n=n,
+        judge_model=judge_model,
+        target_rate=target_rate,
+        rpm=0.0 if pairs is not None else rpm,
+        progress=None if pairs is not None else _progress,
+    )
+    typer.echo(f"Calibrated on {report['pairs']} judged pairs "
+               f"(false-hit base rate {report['false_hit_base_rate']:.1%}).")
+    if report["recommended_theta"] is not None:
+        typer.echo(
+            f"Recommended theta_high = {report['recommended_theta']} "
+            f"(measured false-hit risk <= {report['target_rate']:.1%})."
+        )
+        typer.echo("Set it in preflight.yaml; the risk curve itself is already live "
+                   "for A1 cost estimates on next gateway start.")
+    else:
+        typer.echo("No similarity level met the target rate - cache serving is unsafe "
+                   "at any threshold with the current embedder. Consider a stronger "
+                   "embedding model.")
+    typer.echo(f"Curve: {report['curve_file']}\nPairs: {report['pairs_file']}")
+
+
+@app.command()
 def version():
     """Print the package version."""
     from preflight import __version__

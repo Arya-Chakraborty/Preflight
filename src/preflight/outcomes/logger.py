@@ -13,6 +13,7 @@ import sqlite3
 import threading
 import time
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -81,10 +82,20 @@ class OutcomeLogger:
         with self._conn() as conn:
             conn.executescript(_SCHEMA)
 
-    def _conn(self) -> sqlite3.Connection:
+    @contextmanager
+    def _conn(self):
+        """Open, use inside a transaction, and ALWAYS close.
+
+        Relying on GC to close per-call connections exhausts the process fd
+        limit (macOS defaults to 256) under sustained traffic.
+        """
         conn = sqlite3.connect(self._path, timeout=10)
         conn.row_factory = sqlite3.Row
-        return conn
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
 
     def log(self, o: Outcome) -> str:
         with self._lock, self._conn() as conn:

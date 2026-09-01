@@ -20,6 +20,40 @@ async def test_passthrough(gateway, provider_calls):
     assert row["tokens_out"] == 10
 
 
+async def test_a5_baseline_equals_realized(gateway, monkeypatch):
+    """A raw passthrough saves nothing by definition: baseline must not be
+    inflated by predicted output length (regression test for fake savings)."""
+    import litellm
+
+    async def no_usage_provider(model, messages, stream=False, **kwargs):
+        return {
+            "id": "r1",
+            "object": "chat.completion",
+            "model": model,
+            "choices": [
+                {"index": 0, "message": {"role": "assistant", "content": ANSWER_TEXT},
+                 "finish_reason": "stop"}
+            ],
+            # no usage: gateway accounts tokens locally for both realized and baseline
+        }
+
+    monkeypatch.setattr(litellm, "acompletion", no_usage_provider)
+    await gateway.handle(make_payload())
+    row = gateway.logger.rows()[0]
+    assert row["action"] == "A5"
+    assert abs(row["cost_baseline"] - row["cost_realized"]) < 1e-12
+
+
+async def test_a1_baseline_reflects_answer_length(gateway, provider_calls):
+    payload = make_payload("What is the capital of Italy?")
+    await gateway.handle(payload)
+    await gateway.handle(payload)
+    a1_row = gateway.logger.rows()[1]
+    assert a1_row["action"] == "A1"
+    assert a1_row["cost_realized"] == 0
+    assert a1_row["cost_baseline"] > 0  # savings measured against a real-length answer
+
+
 async def test_exact_cache_hit_skips_api(gateway, provider_calls):
     payload = make_payload("What is the capital of France?")
     await gateway.handle(payload)

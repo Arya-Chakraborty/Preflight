@@ -38,8 +38,8 @@ class Settings(BaseSettings):
     port: int = 8411
 
     # Decision thresholds
-    theta_high: float = 0.97
-    theta_low: float = 0.80
+    theta_high: float = 0.79
+    theta_low: float = 0.60
     lambda_fail: float = 0.02
     tau: float = 0.25
     epsilon: float = 0.05

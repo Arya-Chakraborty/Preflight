@@ -305,10 +305,24 @@ class Gateway:
         realized = self.cost_model.realized_cost(
             x.model, x.provider, in_miss, in_hit, out_tokens
         )
-        baseline_stats = CandidateStats(
-            ctx["ledger_pred"].warm_tokens, ctx["ledger_pred"].cold_tokens
-        )
-        baseline = self.cost_model.raw_call_cost(x, baseline_stats)
+        # Baseline = what this exact request would have cost sent raw.
+        # A5 sends the unmodified prompt, so its baseline IS the realized cost
+        # (avoids phantom savings from local-vs-provider tokenizer mismatches).
+        # For modified prompts (A2/A3/A4) and cache hits (A1) we reconstruct the
+        # raw call from ledger token counts and the ACTUAL output length.
+        if action == "A5":
+            baseline = realized
+        else:
+            baseline_out = out_tokens
+            if action == "A1":
+                baseline_out = tokens.count_text(response_text, x.model)
+            baseline = self.cost_model.realized_cost(
+                x.model,
+                x.provider,
+                ctx["ledger_pred"].cold_tokens,
+                ctx["ledger_pred"].warm_tokens,
+                baseline_out,
+            )
         estimate = decision.estimates.get(action)
 
         outcome = Outcome(

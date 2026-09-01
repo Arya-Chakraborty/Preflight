@@ -11,6 +11,7 @@ import sqlite3
 import threading
 import time
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -54,10 +55,16 @@ class GroundingStore:
         with self._conn() as conn:
             conn.executescript(_SCHEMA)
 
-    def _conn(self) -> sqlite3.Connection:
+    @contextmanager
+    def _conn(self):
+        """Deterministically-closed connection (GC-based closing leaks fds)."""
         conn = sqlite3.connect(self._path, timeout=10)
         conn.row_factory = sqlite3.Row
-        return conn
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
 
     def add_path(self, path: Path) -> int:
         files = [path] if path.is_file() else sorted(

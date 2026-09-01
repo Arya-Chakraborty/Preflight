@@ -2,40 +2,48 @@
 
     import preflight
     client = preflight.wrap()
-    resp = client.chat.completions.create(model="gpt-4o-mini", messages=[...])
+    resp = client.chat.completions.create(model="gemini/gemini-3.5-flash-lite", messages=[...])
 
-Note: `create` is synchronous and runs its own event loop; call it from sync
-code (scripts, notebooks). Inside an async application, use the proxy instead.
+A single background event loop serves all calls, so provider-SDK async hooks
+(e.g. litellm's logging worker) run to completion instead of dying with a
+"coroutine was never awaited" warning when a per-call loop closes.
 """
 
 from __future__ import annotations
 
 import asyncio
+import threading
 
 from preflight.config import Settings
 from preflight.gateway import Gateway
 
 
 class _Completions:
-    def __init__(self, gateway: Gateway):
-        self._gateway = gateway
+    def __init__(self, client: PreflightClient):
+        self._client = client
 
     def create(self, *, model: str, messages: list[dict], session_id: str | None = None, **kwargs):
         if kwargs.pop("stream", False):
             raise ValueError("Library mode is non-streaming; use the proxy for streaming.")
         payload = {"model": model, "messages": messages, **kwargs}
-        return asyncio.run(self._gateway.handle(payload, session_id))
+        return self._client._run(self._client.gateway.handle(payload, session_id))
 
 
 class _Chat:
-    def __init__(self, gateway: Gateway):
-        self.completions = _Completions(gateway)
+    def __init__(self, client: PreflightClient):
+        self.completions = _Completions(client)
 
 
 class PreflightClient:
     def __init__(self, settings: Settings):
         self.gateway = Gateway(settings)
-        self.chat = _Chat(self.gateway)
+        self.chat = _Chat(self)
+        self._loop = asyncio.new_event_loop()
+        self._thread = threading.Thread(target=self._loop.run_forever, daemon=True)
+        self._thread.start()
+
+    def _run(self, coro):
+        return asyncio.run_coroutine_threadsafe(coro, self._loop).result()
 
     def stats(self) -> dict:
         return self.gateway.logger.summary()

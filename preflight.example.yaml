@@ -11,8 +11,10 @@ host: 127.0.0.1
 port: 8411
 
 # --- Decision thresholds ---------------------------------------------------
-theta_high: 0.97      # similarity needed to serve a cached answer (A1)
-theta_low: 0.80       # lower bound of the context-reuse band (A2)
+# theta_high comes from `preflight calibrate` (30-pair fit: 0.7911).
+# theta_low must stay strictly below it so the A2 context-reuse band is non-empty.
+theta_high: 0.79      # similarity needed to serve a cached answer (A1)
+theta_low: 0.60       # lower bound of the context-reuse band (A2)
 lambda_fail: 0.02     # dollars charged per unit of failure probability in scoring
 tau: 0.25             # hard ceiling on acceptable P[fail] per action
 epsilon: 0.05         # exploration rate for the bandit (0 disables exploration)

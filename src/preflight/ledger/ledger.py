@@ -17,6 +17,7 @@ import json
 import sqlite3
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -33,10 +34,14 @@ CREATE TABLE IF NOT EXISTS prefix_chains (
 
 
 def chain_of(messages: list[dict], model: str) -> list[tuple[str, int]]:
-    """Rolling hash chain over message boundaries with cumulative token counts."""
+    """Rolling hash chain over message boundaries with cumulative token counts.
+
+    Starts at 2 to match tokens.count_messages() priming overhead, so ledger
+    totals and assembler candidate totals agree exactly.
+    """
     chain: list[tuple[str, int]] = []
     h = hashlib.sha256()
-    cum = 0
+    cum = 2
     for msg in messages:
         h.update(json.dumps(msg, sort_keys=True, default=str).encode())
         cum += tokens.count_message(msg, model)
@@ -59,10 +64,16 @@ class PrefixLedger:
         with self._conn() as conn:
             conn.executescript(_SCHEMA)
 
-    def _conn(self) -> sqlite3.Connection:
+    @contextmanager
+    def _conn(self):
+        """Deterministically-closed connection (GC-based closing leaks fds)."""
         conn = sqlite3.connect(self._path, timeout=10)
         conn.row_factory = sqlite3.Row
-        return conn
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
 
     def predict(
         self,
