@@ -21,12 +21,22 @@ passthrough, so it is never worse than not having it.
 
 ## Install
 
+Not on PyPI yet. Install from GitHub:
+
 ```bash
-pip install "preflight-llm[memory] @ git+https://github.com/aryachakraborty/preflight-llm"
+pip install "preflight-llm[memory] @ git+https://github.com/Arya-Chakraborty/Preflight.git"
 # full extras (MiniLM embeddings + LLMLingua):
-pip install "preflight-llm[all] @ git+https://github.com/aryachakraborty/preflight-llm"
-# or minimal (deterministic compression + hashing embedder only — not for production cache):
-pip install "preflight-llm @ git+https://github.com/aryachakraborty/preflight-llm"
+pip install "preflight-llm[all] @ git+https://github.com/Arya-Chakraborty/Preflight.git"
+# minimal (deterministic compression + hashing embedder — not for production cache):
+pip install "preflight-llm @ git+https://github.com/Arya-Chakraborty/Preflight.git"
+```
+
+Or from a clone:
+
+```bash
+git clone https://github.com/Arya-Chakraborty/Preflight.git
+cd Preflight
+pip install -e ".[memory]"
 ```
 
 Extras: `[memory]` = sentence-transformers embeddings (recommended for semantic cache quality), `[compression]` = LLMLingua-2, `[examples]` = OpenAI SDK for `examples/proxy_client.py`.
@@ -95,7 +105,7 @@ Every field is overridable via `PREFLIGHT_*` environment variables. Key dials:
 
 This is not a 1.0 freeze. For a locked-down **single-tenant** process:
 
-1. `pip install "preflight-llm[memory]"` so A1/A2 use real embeddings, not hashing.
+1. Install with the `[memory]` extra (see [Install](#install)) so A1/A2 use real embeddings, not hashing.
 2. Copy [preflight.prod.yaml](preflight.prod.yaml), set `api_key` and `spend_cap_usd`.
 3. `preflight serve --config preflight.prod.yaml` — **one process per `data_dir`**. A second serve fails on `preflight.lock`. Keep `data_dir` on a **local** disk (`flock` is advisory and unreliable on NFS). `preflight refit`, `ground`, and `calibrate` also take that lock — stop the server first.
 4. Probe `/health` (liveness) and `/ready` (sqlite + lock). With `api_key` set, unauthenticated `/ready` returns only `{status, ok}`. Bind addresses other than localhost require `api_key` and a spend cap or the process will refuse to start.

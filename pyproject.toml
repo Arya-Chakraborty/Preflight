@@ -43,7 +43,8 @@ dev = ["pytest>=8", "pytest-asyncio>=0.23", "httpx>=0.27", "ruff>=0.4", "openai>
 preflight = "preflight.cli:app"
 
 [project.urls]
-Homepage = "https://github.com/aryachakraborty/preflight-llm"
+Homepage = "https://github.com/Arya-Chakraborty/Preflight"
+Repository = "https://github.com/Arya-Chakraborty/Preflight"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/preflight"]

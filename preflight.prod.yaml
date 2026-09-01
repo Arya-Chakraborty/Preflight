@@ -2,7 +2,7 @@
 #   preflight serve --config preflight.prod.yaml
 #
 # One process per data_dir. Install the [memory] extra so semantic cache is real:
-#   pip install "preflight-llm[memory]"
+#   pip install "preflight-llm[memory] @ git+https://github.com/Arya-Chakraborty/Preflight.git"
 #
 # Calibrate A1 before trusting the cache: `preflight calibrate`
 
